@@ -1,0 +1,8 @@
+[package]
+name = "sdl3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sdl3-sys = { path = "sdl3-sys", features = ["main"] }
+sdl3-macros = { path = "sdl3-macros" }
