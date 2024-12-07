@@ -3,5 +3,11 @@ name = "icarus"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+
+
 [dependencies]
+frunk = "0.4.3"
+nalgebra = "0.33.2"
+petgraph = "0.6.5"
 sdl3 = { path = "sdl3" }
