@@ -9,5 +9,6 @@ edition = "2024"
 
 
 [dependencies]
+frunk = { version = "0.4.3", features = ["std"] }
 nalgebra = "0.33.2"
 sdl3 = { path = "sdl3" }

@@ -1,11 +1,11 @@
-use std::marker::PhantomData;
+use frunk::{HCons, HList, HNil, Poly};
+use frunk::prelude::*;
 use nalgebra::{Quaternion, SVector};
 
 struct Transform {
     position: SVector<f32, 3>,
     rotation: Quaternion<f32>,
-    scale: SVector<f32, 3>,
-    marker: PhantomData<AllComponentTS>,
+    scale: SVector<f32, 3>
 }
 
 struct DeltaTransform {
@@ -25,28 +25,29 @@ impl From<Entity> for usize {
     }
 }
 
-// Component lists use a modified HList pattern
-trait ComponentList {}
 
-struct ComponentListNil();
-impl ComponentList for ComponentListNil {}
+// Component lists use a modified HList pattern
+trait Component {
+}
+
+type ComponentStorage<T> = Vec<T>;
+
+trait ComponentList {
+    type StorageList;
+}
+
+impl ComponentList for HNil {
+    type StorageList = HNil;
+}
+
+impl <T: Component, TailT : ComponentList> ComponentList for HCons<T, TailT> {
+    type StorageList = HCons<ComponentStorage<T>, TailT::StorageList>;
+}
 
 struct ComponentListCons<Head, Tail : ComponentList> {
     head: Vec<Head>,
     tail: Tail,
 }
-
-trait Subset<T: ComponentList> {}
-
-impl <Head, Tail : ComponentList> ComponentList for ComponentListCons<Head, Tail> {}
-
-#[allow(non_snake_case)]
-macro_rules! ComponentList {
-    [] => { ComponentListNil };
-    [ $headT:ty ] => { ComponentListCons<$headT, ComponentList![]> };
-    [$headT:ty $(, $tailTS:ty)+] => { ComponentListCons<$headT, ComponentList![$($tailTS),+]> };
-}
-
 
 struct Archetype<ComponentListT: ComponentList, EntityT : Into<usize> = Entity> {
     entity_list: Vec<EntityT>,
@@ -56,45 +57,43 @@ struct Archetype<ComponentListT: ComponentList, EntityT : Into<usize> = Entity> 
 impl <ComponentListT: ComponentList, EntityT : Into<usize>> Archetype<ComponentListT, EntityT> {
 }
 
-type UnitArchetype = Archetype<ComponentList!(Transform, DeltaTransform, Model)>;
-type TileArchetype = Archetype<ComponentList!(Transform, Model)>;
-
-trait SystemList<AllComponentTS: ComponentList> {}
-struct SystemListNil;
-struct SystemListCons<HeadT : System<>, TailT : SystemList> {
-    head: HeadT,
-    tail: TailT,
-}
+type UnitArchetype = Archetype<HList!(Transform, DeltaTransform, Model)>;
+type TileArchetype = Archetype<HList!(Transform, Model)>;
 
 // World also uses the HList pattern, but one is expected to construct this with a builder style pattern
-trait World<AllComponentTS: ComponentList> {}
+trait ArchetypeList {
+}
 
 // Base aspects for all systems
-struct WorldNil<AllComponentTS: ComponentList, SystemListT: SystemList<AllComponentTS>> {
-    system_list: SystemListT,
-    _all_components: PhantomData<AllComponentTS>,
-}
-struct WorldCons<AllComponentTS: ComponentList, HeadT: ComponentList, Tail : World<AllComponentTS>> {
+struct ArchetypeListNil;
+
+struct ArchetypeListCons<HeadT: ComponentList, Tail : ArchetypeList> {
     head: Archetype<HeadT>,
-    tail: Tail,
-    _all_components: PhantomData<AllComponentTS>,
+    tail: Tail
 }
 
-impl <AllComponentTS: ComponentList, SystemListT: SystemList<AllComponentTS>> World<AllComponentTS> for WorldNil<AllComponentTS, SystemListT> {
+struct World<ArchetypeListT: ArchetypeList, SystemListT: SystemList> {
+    archetype_list: ArchetypeListT,
+    system_list: SystemListT
 }
 
-impl <AllComponentTS: ComponentList, SubsetTS: Subset<AllComponentTS>, Tail: World<AllComponentTS>> World<AllComponentTS> for WorldCons<AllComponentTS, SubsetTS, Tail> {}
+impl <ArchetypeListT: ArchetypeList, SystemListT: SystemList> World<ArchetypeListNil, SystemListNil> {
+    fn apply_systems(&mut self) {
+        self.system_list.update_all(self.archetype_list.components().sculpt())
+    }
+}
 
 trait System {
     type Components: ComponentList;
-    fn update(&mut self);
+    fn update(&mut self, components: &mut Self::Components);
 }
 
 struct MovementSystem;
 
 impl System for MovementSystem {
     type Components = ComponentList!(Transform, DeltaTransform);
-    fn update(&mut self) {
+
+    fn update(&mut self, components: &mut Self::Components) {
         todo!()
     }
 }
@@ -104,10 +103,7 @@ struct RenderSystem;
 impl System for RenderSystem {
     type Components = ComponentList!(Transform, Model);
 
-    fn update(&mut self) {
+    fn update(&mut self, components: &mut Self::Components) {
+        todo!()
     }
-}
-
-struct ECS {
-
 }
