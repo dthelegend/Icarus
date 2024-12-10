@@ -58,9 +58,9 @@ impl <T: ComponentList, TailT: ArchetypeList> ArchetypeList for HCons<Archetype<
 
 // SYSTEM
 trait System {
-    type InstanceT: ComponentList;
+    type Components: ComponentList;
 
-    fn instance_update(instance: Self::InstanceT) -> Self::InstanceT;
+    fn instance_update(instance: Self::Components) -> Self::Components;
 }
 
 pub trait SystemList: Sealed {
@@ -76,13 +76,8 @@ struct World<ArchetypeListT: ArchetypeList, SystemListT: SystemList> {
     system_list: SystemListT
 }
 
-impl <ArchetypeListT: ArchetypeList> World<ArchetypeListT, HNil> {
-}
-
-impl <'a, SystemHeadT: System<InstanceT: ToMut<'a>>, SystemTailT: SystemList, ArchetypeHeadT: ComponentList + ToMut<'a>, ArchetypeTailT: ArchetypeList> World<HCons<Archetype<ArchetypeHeadT>, ArchetypeTailT>, HCons<SystemHeadT, SystemTailT>> {
-    fn apply(&mut self) {
-        todo!()
-    }
+impl <'a, SystemListT: SystemList, ArchetypeListT: ArchetypeList> World<ArchetypeListT, SystemListT> {
+    
 }
 
 mod example {
