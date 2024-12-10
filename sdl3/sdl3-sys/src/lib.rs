@@ -3,6 +3,7 @@
 #![allow(non_snake_case)]
 #![allow(unused)]
 #![allow(improper_ctypes)]
+#![allow(clashing_extern_declarations)]
 
 #[cfg(feature = "main")]
 mod sdl_main;
