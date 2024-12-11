@@ -2,6 +2,7 @@ use frunk::{Generic, HCons, HList, HNil};
 use frunk::prelude::*;
 use frunk_core::coproduct::CoproductSubsetter;
 use frunk_core::hlist::{Sculptor, HFoldLeftable, HMappable};
+use frunk_core::poly_fn;
 use frunk_core::traits::{Func, Poly, ToMut};
 use nalgebra::{Quaternion, SVector};
 use rayon::prelude::*;
@@ -70,6 +71,14 @@ struct World<ArchetypeListT: ToComponentList, SystemListT: SystemList> {
     systems: SystemListT,
 }
 
+
+
+impl<ArchetypeListT: ToComponentList, SystemListT: SystemList> World<ArchetypeListT, SystemListT> {
+    pub fn apply_over_all(self) {
+        todo!()
+    }
+}
+
 struct ParallelArrayMapping;
 
 impl <'a, T> Func<&'a mut ComponentStorage<T>> for ParallelArrayMapping
@@ -100,7 +109,8 @@ where
     <ArchetypeListT as ToComponentList>::Output: ToMut<'a>,
     <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: 'a
 {
-    fn apply_all<SystemT: System, Indices>(&'a mut self, _system: &'a mut SystemT)
+    // Mutable reference to system is for
+    fn apply_system<SystemT: System, Indices>(&'a mut self, _system: &'a mut SystemT)
     where
         <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a>,
         <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: Sculptor<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, Indices>,
@@ -173,23 +183,23 @@ mod example {
     }
 
     struct MovementSystem;
-    // impl System for MovementSystem {
-    //     type Components = HList!(Transform, DeltaTransform);
-    // 
-    //     fn update_instance(mut instance: Self::Components) -> Self::Components {
-    //         let delta = *instance.get::<DeltaTransform, _>();
-    //         *instance.get_mut::<Transform, _>() += delta;
-    // 
-    //         instance
-    //     }
-    // }
+    impl System for MovementSystem {
+        type InstanceT = HList!(Transform, DeltaTransform);
+    
+        fn update_instance(mut instance: Self::InstanceT) -> Self::InstanceT {
+            let delta = *instance.get::<DeltaTransform, _>();
+            *instance.get_mut::<Transform, _>() += delta;
+    
+            instance
+        }
+    }
 
     struct RenderSystem;
-    // impl System for RenderSystem {
-    //     type Components = HList!(Transform, Model);
-    // 
-    //     fn update_instance(instance: Self::Components) -> Self::Components {
-    //         todo!()
-    //     }
-    // }
+    impl System for RenderSystem {
+        type InstanceT = HList!(Transform, Model);
+    
+        fn update_instance(_instance: Self::InstanceT) -> Self::InstanceT {
+            todo!()
+        }
+    }
 }
