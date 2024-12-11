@@ -6,7 +6,6 @@ use frunk_core::poly_fn;
 use frunk_core::traits::{Func, Poly, ToMut};
 use nalgebra::{Quaternion, SVector};
 use rayon::prelude::*;
-use crate::ecs::example::Transform;
 
 trait Sealed {}
 impl Sealed for HNil {}
@@ -28,7 +27,7 @@ impl ComponentList for HNil {}
 impl <HeadT, TailT: ComponentList> ComponentList for HCons<ComponentStorage<HeadT>, TailT> {}
 
 trait ToComponentList: HList {
-    type Output: HList;
+    type Output: ComponentList;
 }
 
 impl ToComponentList for HNil {
@@ -36,12 +35,21 @@ impl ToComponentList for HNil {
 }
 
 impl <HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT> {
-    type Output = HCons<HeadT, <TailT as ToComponentList>::Output>;
+    type Output = HCons<ComponentStorage<HeadT>, <TailT as ToComponentList>::Output>;
 }
 
 pub struct Archetype<ComponentListT: ToComponentList, EntityT : Into<usize> = Entity> {
     entity_list: ComponentStorage<EntityT>,
     components: ComponentListT::Output
+}
+
+impl<ComponentListT: ToComponentList<Output: Default>, EntityT: Into<usize>> Default for Archetype<ComponentListT, EntityT> {
+    fn default() -> Self {
+        Self {
+            entity_list: Default::default(),
+            components: Default::default()
+        }
+    }
 }
 
 pub trait ArchetypeList: Sealed {
@@ -66,18 +74,15 @@ impl SystemList for HNil {
 impl <T: System, TailT: SystemList> SystemList for HCons<T, TailT>{
 }
 
-struct World<ArchetypeListT: ToComponentList, SystemListT: SystemList> {
-    archetypes: ArchetypeListT::Output,
+struct World<SystemListT: SystemList, ArchetypeListT: ArchetypeList + Default> {
     systems: SystemListT,
+    archetypes: ArchetypeListT,
 }
 
-
-
-impl<ArchetypeListT: ToComponentList, SystemListT: SystemList> World<ArchetypeListT, SystemListT> {
-    pub fn apply_over_all(self) {
-        todo!()
-    }
-}
+// impl<ArchetypeListT: ToComponentList, SystemListT: SystemList> World<ArchetypeListT, SystemListT> {
+//     pub fn apply_over_all(&mut self) {
+//     }
+// }
 
 struct ParallelArrayMapping;
 
@@ -129,18 +134,20 @@ where
     }
 }
 
-mod example {
+#[cfg(test)]
+mod test {
     use std::ops::{Add, AddAssign};
+    use frunk_core::{hlist, generic::Generic};
     use super::*;
 
-    #[derive(Copy, Clone)]
+    #[derive(Copy, Clone, Default, Generic)]
     pub struct Transform {
         position: SVector<f32, 3>,
         rotation: Quaternion<f32>,
         scale: SVector<f32, 3>
     }
 
-    #[derive(Copy, Clone)]
+    #[derive(Copy, Clone, Default, Generic)]
     pub struct DeltaTransform {
         position: SVector<f32, 3>,
         rotation: Quaternion<f32>,
@@ -164,6 +171,8 @@ mod example {
             *self = *self + rhs;
         }
     }
+    
+    #[derive(Copy, Clone, Default, Generic)]
 
     pub struct Model {
         // TODO
@@ -201,5 +210,25 @@ mod example {
         fn update_instance(_instance: Self::InstanceT) -> Self::InstanceT {
             todo!()
         }
+    }
+    
+    #[test]
+    fn test_ecs() {
+        let x: HList![Vec<<DeltaTransform as frunk::Generic>::Repr>] = Default::default();
+        
+        type TestSystems = HList![MovementSystem, RenderSystem];
+        type TestArchetypes = HList![Archetype<<Unit as frunk::Generic>::Repr>, Archetype<<Tile as frunk::Generic>::Repr>];
+        
+        let test_world : World<TestSystems, TestArchetypes> = World {
+            systems: hlist![MovementSystem, RenderSystem],
+            archetypes: Default::default(),
+        };
+        
+        test_world.archetypes.foldl(poly_fn![
+            [T] | x: ((), Archetype<T>) | -> () {
+                x.1.apply_system(&mut MovementSystem);
+                ()
+            },
+        ], ());
     }
 }
