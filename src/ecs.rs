@@ -1,4 +1,3 @@
-use std::iter::repeat;
 use frunk::{Generic, HCons, HList, HNil};
 use frunk::prelude::*;
 use frunk_core::coproduct::CoproductSubsetter;
@@ -27,7 +26,7 @@ pub trait ComponentList: HList + Sealed {}
 impl ComponentList for HNil {}
 impl <HeadT, TailT: ComponentList> ComponentList for HCons<ComponentStorage<HeadT>, TailT> {}
 
-trait ToComponentList {
+trait ToComponentList: HList {
     type Output: HList;
 }
 
@@ -39,50 +38,21 @@ impl <HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT> {
     type Output = HCons<HeadT, <TailT as ToComponentList>::Output>;
 }
 
-pub struct Archetype<ComponentListT: ComponentList, EntityT : Into<usize> = Entity> {
+pub struct Archetype<ComponentListT: ToComponentList, EntityT : Into<usize> = Entity> {
     entity_list: ComponentStorage<EntityT>,
-    components: ComponentListT
+    components: ComponentListT::Output
 }
 
-trait IntoArchetype : Generic<Repr: ComponentList> {
-    type AsArchetype = Archetype<<Self as Generic>::Repr>;
-}
-
-trait ArchetypeList: Sealed {
+pub trait ArchetypeList: Sealed {
 }
 
 impl ArchetypeList for HNil {}
 
-impl <T: ComponentList, TailT: ArchetypeList> ArchetypeList for HCons<Archetype<T>, TailT> {}
-
-// trait ComponentListZippable : ComponentList {
-//     type ZipT: HList;
-//     fn zip<'a>(&'a mut self) -> impl ParallelIterator<Item = Self::ZipT>;
-// }
-//
-// impl ComponentListZippable for HNil {
-//     type ZipT = HNil;
-//     fn zip<'a>(&'a mut self) -> impl ParallelIterator<Item = Self::ZipT> {
-//         repeat(HNil).par_bridge()
-//     }
-// }
-//
-// impl <HeadT, TailT: ComponentListZippable> ComponentListZippable for HCons<ComponentStorage<HeadT>, TailT>
-// where ComponentStorage<HeadT>: for<'a> IntoParallelRefMutIterator<'a, Iter: IndexedParallelIterator>,
-//     // TailT::ZipT: IntoParallelIterator<Iter: IndexedParallelIterator>
-// {
-//     type ZipT = HCons<HeadT, TailT::ZipT>;
-//
-//     fn zip<'a>(&'a mut self) -> impl ParallelIterator<Item=Self::ZipT> {
-//         self.head.par_iter_mut()
-//             .zip(ComponentListZippable::zip(&mut self.tail))
-//             .map(|(head, tail)| HCons::)
-//     }
-// }
+impl <T: ToComponentList, TailT: ArchetypeList> ArchetypeList for HCons<Archetype<T>, TailT> {}
 
 // SYSTEM
 trait System {
-    type InstanceT: ComponentList;
+    type InstanceT: ToComponentList;
     fn update_instance(instance: Self::InstanceT) -> Self::InstanceT;
 }
 
@@ -95,8 +65,8 @@ impl SystemList for HNil {
 impl <T: System, TailT: SystemList> SystemList for HCons<T, TailT>{
 }
 
-struct World<ArchetypeListT: ArchetypeList, SystemListT: SystemList> {
-    archetypes: ArchetypeListT,
+struct World<ArchetypeListT: ToComponentList, SystemListT: SystemList> {
+    archetypes: ArchetypeListT::Output,
     systems: SystemListT,
 }
 
@@ -122,20 +92,28 @@ impl <AccT: IndexedParallelIterator<Item: HList>, InputT: IndexedParallelIterato
     }
 }
 
-impl <ArchetypeListT, SystemListT> System<ArchetypeListT, SystemListT>
+impl <ArchetypeListT, EntityT> Archetype<ArchetypeListT, EntityT>
 where
-    SystemListT: SystemList,
-
-    ArchetypeListT: ArchetypeList + for<'a> ToMut<'a>,
-    for<'a> <ArchetypeListT as ToMut<'a>>::Output: HMappable<Poly<ParallelArrayMapping>>,
-    for<'a> <<ArchetypeListT as ToMut<'a>>::Output as HMappable<Poly<ParallelArrayMapping>>>::Output: HFoldLeftable<Poly<ParallelArrayZip>, rayon::iter::Repeat<HNil>>,
-    for<'a> <<<ArchetypeListT as ToMut<'a>>::Output as HMappable<Poly<ParallelArrayMapping>>>::Output as HFoldLeftable<Poly<ParallelArrayZip>, rayon::iter::Repeat<HNil>>>::Output: ParallelIterator<Item = >
+    EntityT: Into<usize>,
+    
+    ArchetypeListT: ToComponentList + for<'a> ToMut<'a>,
+    <ArchetypeListT as ToComponentList>::Output: for<'a> ToMut<'a>
 {
-    fn apply_all(&mut self) {
-        let par_arrays = self.archetypes.to_mut().map(Poly(ParallelArrayMapping));
+    fn apply_all<'a, SystemT: System, Indices, X>(&mut self, _system: &mut SystemT)
+    where
+        <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a> + 'a,
+        <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: Sculptor<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, Indices>,
+        <<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output: HMappable<Poly<ParallelArrayMapping>>,
+        <<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output as HMappable<Poly<ParallelArrayMapping>>>::Output: HFoldLeftable<Poly<ParallelArrayZip>, rayon::iter::Repeat<HNil>>,
+        <<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output as HMappable<Poly<ParallelArrayMapping>>>::Output as HFoldLeftable<Poly<ParallelArrayZip>, rayon::iter::Repeat<HNil>>>::Output: ParallelIterator<Item = <SystemT as System>::InstanceT>
+    {
+        let (relevant_components, _): (<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, _) = self.components.to_mut().sculpt();
+        let par_arrays = relevant_components.map(Poly(ParallelArrayMapping));
         let zipped_par_arrays = par_arrays.foldl(Poly(ParallelArrayZip), rayon::iter::repeat(HNil));
         
-        zipped_par_arrays.
+        zipped_par_arrays.for_each(|instance| {
+            SystemT::update_instance(instance);
+        });
     }
 }
 
