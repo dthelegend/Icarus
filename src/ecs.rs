@@ -92,22 +92,24 @@ impl <AccT: IndexedParallelIterator<Item: HList>, InputT: IndexedParallelIterato
     }
 }
 
-impl <ArchetypeListT, EntityT> Archetype<ArchetypeListT, EntityT>
+impl <'a, ArchetypeListT, EntityT> Archetype<ArchetypeListT, EntityT>
 where
     EntityT: Into<usize>,
     
-    ArchetypeListT: ToComponentList + for<'a> ToMut<'a>,
-    <ArchetypeListT as ToComponentList>::Output: for<'a> ToMut<'a>
+    ArchetypeListT: ToComponentList + ToMut<'a>,
+    <ArchetypeListT as ToComponentList>::Output: ToMut<'a>,
+    <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: 'a
 {
-    fn apply_all<'a, SystemT: System, Indices, X>(&mut self, _system: &mut SystemT)
+    fn apply_all<SystemT: System, Indices>(&'a mut self, _system: &'a mut SystemT)
     where
-        <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a> + 'a,
+        <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a>,
         <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: Sculptor<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, Indices>,
         <<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output: HMappable<Poly<ParallelArrayMapping>>,
         <<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output as HMappable<Poly<ParallelArrayMapping>>>::Output: HFoldLeftable<Poly<ParallelArrayZip>, rayon::iter::Repeat<HNil>>,
         <<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output as HMappable<Poly<ParallelArrayMapping>>>::Output as HFoldLeftable<Poly<ParallelArrayZip>, rayon::iter::Repeat<HNil>>>::Output: ParallelIterator<Item = <SystemT as System>::InstanceT>
     {
-        let (relevant_components, _): (<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, _) = self.components.to_mut().sculpt();
+        let exzy = self.components.to_mut();
+        let (relevant_components, _): (<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, _) = exzy.sculpt();
         let par_arrays = relevant_components.map(Poly(ParallelArrayMapping));
         let zipped_par_arrays = par_arrays.foldl(Poly(ParallelArrayZip), rayon::iter::repeat(HNil));
         

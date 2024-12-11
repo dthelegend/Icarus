@@ -3,7 +3,7 @@ use crate::grid::Grid;
 
 // Axial Hex Grid implementation
 pub struct AxialHexGrid<T, const size: usize>(SMatrix<T, size, size>);
-enum AxialHexGridDirection {
+pub enum AxialHexGridDirection {
     NorthWest,
     NorthEast,
     East,
