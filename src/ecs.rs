@@ -1,3 +1,4 @@
+use std::process::Output;
 use frunk::{Generic, HCons, HList, HNil};
 use frunk::prelude::*;
 use frunk_core::coproduct::CoproductSubsetter;
@@ -11,20 +12,48 @@ trait Sealed {}
 impl Sealed for HNil {}
 impl <T, U> Sealed for HCons<T, U> {}
 
+
 pub struct Entity(usize);
-impl From<Entity> for usize {
-    fn from(value: Entity) -> Self {
-        value.0
+impl From<usize> for Entity {
+    fn from(value: usize) -> Self {
+        Entity(value)
     }
 }
 
 // Component lists use a modified HList pattern
 pub type ComponentStorage<T> = Vec<T>;
 
-pub trait ComponentList: HList + Sealed {}
+pub trait ComponentList: HList + Sealed {
+}
 
-impl ComponentList for HNil {}
-impl <HeadT, TailT: ComponentList> ComponentList for HCons<ComponentStorage<HeadT>, TailT> {}
+impl ComponentList for HNil {
+}
+impl <HeadT, TailT: ComponentList> ComponentList for HCons<ComponentStorage<HeadT>, TailT>
+{
+}
+
+pub trait ToParMut: HList + Sealed {
+    type Output: IndexedParallelIterator<Item: HList>;
+
+    fn get_parallel_mut(self) -> Self::Output;
+}
+
+impl ToParMut for HNil {
+    type Output = impl IndexedParallelIterator<Item: HList>;
+
+    fn get_parallel_mut(self) -> Self::Output {
+        rayon::iter::repeatn(HNil, usize::MAX) // Realistically the largest value
+    }
+}
+impl <HeadT, TailT: ToParMut> ToParMut for HCons<HeadT, TailT>
+where
+    HeadT: IntoParallelIterator<Iter: IndexedParallelIterator>
+{
+    type Output = impl IndexedParallelIterator<Item: HList>;
+    fn get_parallel_mut(self) -> Self::Output {
+        self.tail.get_parallel_mut().zip(self.head.into_par_iter()).map(|(x, a)| x.prepend(a))
+    }
+}
 
 trait ToComponentList: HList {
     type Output: ComponentList;
@@ -34,35 +63,37 @@ impl ToComponentList for HNil {
     type Output = HNil;
 }
 
-impl <HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT> {
+impl <HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT>
+where Vec<HeadT>: for<'a> IntoParallelRefMutIterator<'a, Iter: IndexedParallelIterator> {
     type Output = HCons<ComponentStorage<HeadT>, <TailT as ToComponentList>::Output>;
 }
 
-pub struct Archetype<ComponentListT: ToComponentList, EntityT : Into<usize> = Entity> {
+#[derive(Default)]
+pub struct Archetype<ComponentListT: ToComponentList, EntityT : From<usize> = Entity> {
     entity_list: ComponentStorage<EntityT>,
     components: ComponentListT::Output
 }
 
-impl<ComponentListT: ToComponentList<Output: Default>, EntityT: Into<usize>> Default for Archetype<ComponentListT, EntityT> {
-    fn default() -> Self {
-        Self {
-            entity_list: Default::default(),
-            components: Default::default()
-        }
-    }
-}
-
 pub trait ArchetypeList: Sealed {
+    // fn apply_system<SystemT: System>(&mut self);
 }
 
-impl ArchetypeList for HNil {}
+impl ArchetypeList for HNil {
+    // fn apply_system<SystemT: System>(&mut self) {}
+}
 
-impl <T: ToComponentList, TailT: ArchetypeList> ArchetypeList for HCons<Archetype<T>, TailT> {}
+impl <'a, T: ToComponentList + ToMut<'a>, TailT: ArchetypeList> ArchetypeList for HCons<Archetype<T>, TailT> {
+    // fn apply_system<SystemT: System>(&mut self)
+    // {
+    //     self.head.apply_system::<SystemT, _>();
+    //     self.tail.apply_system::<SystemT, _>();
+    // }
+}
 
 // SYSTEM
 trait System {
-    type InstanceT: ToComponentList;
-    fn update_instance(instance: Self::InstanceT) -> Self::InstanceT;
+    type InstanceT: for<'a> ToMut<'a>;
+    fn update_instance(instance: <Self::InstanceT as ToMut>::Output);
 }
 
 pub trait SystemList: Sealed {
@@ -84,18 +115,6 @@ struct World<SystemListT: SystemList, ArchetypeListT: ArchetypeList + Default> {
 //     }
 // }
 
-struct ParallelArrayMapping;
-
-impl <'a, T> Func<&'a mut ComponentStorage<T>> for ParallelArrayMapping
-where ComponentStorage<T>: IntoParallelRefMutIterator<'a, Iter: IndexedParallelIterator>
-{
-    type Output = impl IndexedParallelIterator;
-
-    fn call(i: &'a mut ComponentStorage<T>) -> Self::Output {
-        i.par_iter_mut()
-    }
-}
-
 struct ParallelArrayZip;
 
 impl <AccT: IndexedParallelIterator<Item: HList>, InputT: IndexedParallelIterator> Func<(AccT, InputT)> for ParallelArrayZip {
@@ -106,31 +125,24 @@ impl <AccT: IndexedParallelIterator<Item: HList>, InputT: IndexedParallelIterato
     }
 }
 
-impl <'a, ArchetypeListT, EntityT> Archetype<ArchetypeListT, EntityT>
+impl <ArchetypeListT, EntityT> Archetype<ArchetypeListT, EntityT>
 where
-    EntityT: Into<usize>,
-    
-    ArchetypeListT: ToComponentList + ToMut<'a>,
-    <ArchetypeListT as ToComponentList>::Output: ToMut<'a>,
-    <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: 'a
+    ArchetypeListT: ToComponentList,
+    EntityT: From<usize>
 {
     // Mutable reference to system is for
-    fn apply_system<SystemT: System, Indices>(&'a mut self, _system: &'a mut SystemT)
+    fn apply_system<'a, SystemT, Indices>(&'a mut self)
     where
-        <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a>,
+        ArchetypeListT: ToComponentList + ToMut<'a>,
+        <ArchetypeListT as ToComponentList>::Output: ToMut<'a>,
         <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: Sculptor<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, Indices>,
-        <<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output: HMappable<Poly<ParallelArrayMapping>>,
-        <<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output as HMappable<Poly<ParallelArrayMapping>>>::Output: HFoldLeftable<Poly<ParallelArrayZip>, rayon::iter::Repeat<HNil>>,
-        <<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output as HMappable<Poly<ParallelArrayMapping>>>::Output as HFoldLeftable<Poly<ParallelArrayZip>, rayon::iter::Repeat<HNil>>>::Output: ParallelIterator<Item = <SystemT as System>::InstanceT>
+        SystemT: System,
+        <SystemT as System>::InstanceT: ToMut<'a> + ToComponentList,
+        <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a>,
+        <<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output: ToParMut<Output: ParallelIterator<Item = <<SystemT as System>::InstanceT as ToMut<'a>>::Output>>,
     {
-        let exzy = self.components.to_mut();
-        let (relevant_components, _): (<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, _) = exzy.sculpt();
-        let par_arrays = relevant_components.map(Poly(ParallelArrayMapping));
-        let zipped_par_arrays = par_arrays.foldl(Poly(ParallelArrayZip), rayon::iter::repeat(HNil));
-        
-        zipped_par_arrays.for_each(|instance| {
-            SystemT::update_instance(instance);
-        });
+        let (resolved_components, _) : (<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, _) = self.components.to_mut().sculpt();
+        resolved_components.get_parallel_mut().for_each(SystemT::update_instance);
     }
 }
 
@@ -194,41 +206,66 @@ mod test {
     struct MovementSystem;
     impl System for MovementSystem {
         type InstanceT = HList!(Transform, DeltaTransform);
-    
-        fn update_instance(mut instance: Self::InstanceT) -> Self::InstanceT {
-            let delta = *instance.get::<DeltaTransform, _>();
-            *instance.get_mut::<Transform, _>() += delta;
-    
-            instance
+
+        fn update_instance(instance: <Self::InstanceT as ToMut>::Output) {
+            let (delta, instance) : (&mut DeltaTransform, _) = instance.pluck();
+            let (transform, _) = instance.pluck();
+            *transform += *delta;
         }
     }
 
     struct RenderSystem;
     impl System for RenderSystem {
         type InstanceT = HList!(Transform, Model);
-    
-        fn update_instance(_instance: Self::InstanceT) -> Self::InstanceT {
-            todo!()
+
+        fn update_instance(_instance: <Self::InstanceT as ToMut>::Output) {
+            println!("I feel totally modeled rn");
         }
     }
-    
+
     #[test]
     fn test_ecs() {
-        let x: HList![Vec<<DeltaTransform as frunk::Generic>::Repr>] = Default::default();
+        type TestSystem = RenderSystem;
+        type TestArchetype = Archetype<<Tile as frunk::Generic>::Repr>;
         
-        type TestSystems = HList![MovementSystem, RenderSystem];
-        type TestArchetypes = HList![Archetype<<Unit as frunk::Generic>::Repr>, Archetype<<Tile as frunk::Generic>::Repr>];
+        let transform_base = Transform::default();
+        let model_base = Model{};
         
-        let test_world : World<TestSystems, TestArchetypes> = World {
-            systems: hlist![MovementSystem, RenderSystem],
-            archetypes: Default::default(),
+        let mut test_arch: TestArchetype = Archetype {
+            entity_list: vec![0,1,2,3].into_iter().map(|x| (x as usize).into()).collect(),
+            components: hlist![
+                std::iter::repeat_n(transform_base, 4).collect(),
+                std::iter::repeat_n(model_base, 4).collect(),
+            ]
         };
         
-        test_world.archetypes.foldl(poly_fn![
-            [T] | x: ((), Archetype<T>) | -> () {
-                x.1.apply_system(&mut MovementSystem);
-                ()
-            },
-        ], ());
+        let x = test_arch.components.sculpt::<<<Tile as frunk::Generic>::Repr as ToComponentList>::Output, _>();
+        
+        test_arch.apply_system::<TestSystem, frunk::indices::IdentityTransMog>();
+        
+        // test_world.archetypes.to_mut().foldl(poly_fn![
+        //     [T] | x: &mut Archetype<T> | -> () { x.apply_system::<MovementSystem, _>() },
+        // ], &mut test_world.systems.head);
+        // test_world.archetypes.to_mut().map(Poly(ArchMap));
+
+        assert!(false, "YAY!");
     }
+    
+    // #[test]
+    // fn test_ecs() {
+    //     // type TestSystems = HList![MovementSystem, RenderSystem];
+    //     // type TestArchetypes = HList![Archetype<<Unit as frunk::Generic>::Repr>, Archetype<<Tile as frunk::Generic>::Repr>];
+    //     // 
+    //     // let mut test_world : World<TestSystems, TestArchetypes> = World {
+    //     //     systems: hlist![MovementSystem, RenderSystem],
+    //     //     archetypes: Default::default(),
+    //     // };
+    //     // 
+    //     // // test_world.archetypes.to_mut().foldl(poly_fn![
+    //     // //     [T] | x: &mut Archetype<T> | -> () { x.apply_system::<MovementSystem, _>() },
+    //     // // ], &mut test_world.systems.head);
+    //     // // test_world.archetypes.to_mut().map(Poly(ArchMap));
+    //     // 
+    //     // assert!(false, "YAY!");
+    // }
 }
