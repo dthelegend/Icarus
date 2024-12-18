@@ -77,31 +77,31 @@ pub struct Archetype<ComponentListT: ToComponentList, EntityT : From<usize> = En
     components: ComponentListT::Output
 }
 
-trait SystemApplicator<SystemT> {}
+trait SystemApplicator<SystemT> {
+    fn apply<SomeT: ToComponentList>(self, archetype: Archetype<SomeT>);
+}
 
 trait SystemApplicable<SystemT, WithIndices> : SystemApplicator<SystemT> {
-    
 }
 
 trait SystemInapplicable<SystemT> : SystemApplicator<SystemT> {
-    
 }
 
-pub trait ArchetypeList: Sealed {
-    // fn apply_system<SystemT: System>(&mut self);
+pub trait ArchetypeList: HList + Sealed {
+    fn apply_system<'a, SystemT: System>(&mut self) where <SystemT as System>::InstanceT: ToComponentList, <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a> ;
 }
 
 impl ArchetypeList for HNil {
-    // fn apply_system<SystemT: System>(&mut self) {}
+    fn apply_system<'a, SystemT: System>(&mut self) where <SystemT as System>::InstanceT: ToComponentList, <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a> {}
 }
 
-impl <'a, T: ToComponentList + ToMut<'a>, TailT: ArchetypeList> ArchetypeList for HCons<Archetype<T>, TailT> {
-    // fn apply_system<SystemT: System>(&mut self)
-    // {
-    //     self.head.apply_system::<SystemT, _>();
-    //     self.tail.apply_system::<SystemT, _>();
-    // }
+impl <T: ToComponentList + for<'a> ToMut<'a>, TailT: ArchetypeList> ArchetypeList for HCons<Archetype<T>, TailT> {
+    fn apply_system<'a, SystemT: System>(&mut self) where <SystemT as System>::InstanceT: ToComponentList, <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a> {
+        self.head.apply_system::<SystemT, _>()
+    }
 }
+
+
 
 // SYSTEM
 trait System {
@@ -110,12 +110,19 @@ trait System {
 }
 
 pub trait SystemList: Sealed {
+    fn apply_to_archlist<ArchetypeListT: ArchetypeList>(archlist: &mut ArchetypeListT);
 }
 
 impl SystemList for HNil {
+    fn apply_to_archlist<ArchetypeListT: ArchetypeList>(_archlist: &mut ArchetypeListT) {
+        // pass
+    }
 }
 
 impl <T: System, TailT: SystemList> SystemList for HCons<T, TailT>{
+    fn apply_to_archlist<ArchetypeListT: ArchetypeList>(archlist: &mut ArchetypeListT) {
+        archlist.apply_system::<T>()
+    }
 }
 
 struct World<SystemListT: SystemList, ArchetypeListT: ArchetypeList + Default> {
