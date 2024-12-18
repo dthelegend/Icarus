@@ -67,7 +67,7 @@ impl ToComponentList for HNil {
 }
 
 impl <HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT>
-where Vec<HeadT>: for<'a> IntoParallelRefMutIterator<'a, Iter: IndexedParallelIterator> {
+where ComponentStorage<HeadT>: for<'a> IntoParallelRefMutIterator<'a, Iter: IndexedParallelIterator> {
     type Output = HCons<ComponentStorage<HeadT>, <TailT as ToComponentList>::Output>;
 }
 
@@ -75,6 +75,16 @@ where Vec<HeadT>: for<'a> IntoParallelRefMutIterator<'a, Iter: IndexedParallelIt
 pub struct Archetype<ComponentListT: ToComponentList, EntityT : From<usize> = Entity> {
     entity_list: ComponentStorage<EntityT>,
     components: ComponentListT::Output
+}
+
+trait SystemApplicator<SystemT> {}
+
+trait SystemApplicable<SystemT, WithIndices> : SystemApplicator<SystemT> {
+    
+}
+
+trait SystemInapplicable<SystemT> : SystemApplicator<SystemT> {
+    
 }
 
 pub trait ArchetypeList: Sealed {
@@ -113,11 +123,6 @@ struct World<SystemListT: SystemList, ArchetypeListT: ArchetypeList + Default> {
     archetypes: ArchetypeListT,
 }
 
-// impl<ArchetypeListT: ToComponentList, SystemListT: SystemList> World<ArchetypeListT, SystemListT> {
-//     pub fn apply_over_all(&mut self) {
-//     }
-// }
-
 struct ParallelArrayZip;
 
 impl <AccT: IndexedParallelIterator<Item: HList>, InputT: IndexedParallelIterator> Func<(AccT, InputT)> for ParallelArrayZip {
@@ -151,9 +156,8 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::iter::Zip;
     use std::ops::{Add, AddAssign};
-    use frunk_core::{hlist, generic::Generic};
+    use frunk::hlist;
     use nalgebra::vector;
     use super::*;
 
