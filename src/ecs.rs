@@ -32,26 +32,29 @@ impl <HeadT, TailT: ComponentList> ComponentList for HCons<ComponentStorage<Head
 {
 }
 
-pub trait ToParMut: HList + Sealed {
-    type Output: IndexedParallelIterator<Item: HList>;
+pub trait IntoParIter: HList + Sealed {
+    type Item: HList + Send;
 
-    fn get_parallel_mut(self) -> Self::Output;
+    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item>;
 }
 
-impl ToParMut for HNil {
-    type Output = impl IndexedParallelIterator<Item: HList>;
-
-    fn get_parallel_mut(self) -> Self::Output {
-        rayon::iter::repeatn(HNil, usize::MAX) // Realistically the largest value
+impl <HeadT> IntoParIter for HCons<HeadT, HNil>
+where
+    HeadT: IntoParallelIterator<Iter: IndexedParallelIterator>, <HeadT as IntoParallelIterator>::Item: Send
+{
+    type Item = HList![<HeadT as IntoParallelIterator>::Item];
+    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item> {
+        rayon::iter::repeat(HNil).zip(self.head.into_par_iter()).map(|(hnil, x)| hnil.prepend(x))
     }
 }
-impl <HeadT, TailT: ToParMut> ToParMut for HCons<HeadT, TailT>
+
+impl <HeadT, TailT: IntoParIter> IntoParIter for HCons<HeadT, TailT>
 where
-    HeadT: IntoParallelIterator<Iter: IndexedParallelIterator>
+    HeadT: IntoParallelIterator<Iter: IndexedParallelIterator>, <HeadT as IntoParallelIterator>::Item: Send
 {
-    type Output = impl IndexedParallelIterator<Item: HList>;
-    fn get_parallel_mut(self) -> Self::Output {
-        self.tail.get_parallel_mut().zip(self.head.into_par_iter()).map(|(x, a)| x.prepend(a))
+    type Item = HList![<HeadT as IntoParallelIterator>::Item, ...<TailT as IntoParIter>::Item];
+    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item> {
+        self.tail.get_parallel_mut().zip(self.head.into_par_iter()).map(|(tail, head)| tail.prepend(head))
     }
 }
 
@@ -139,7 +142,7 @@ where
         SystemT: System,
         <SystemT as System>::InstanceT: ToMut<'a> + ToComponentList,
         <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a>,
-        <<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output: ToParMut<Output: ParallelIterator<Item = <<SystemT as System>::InstanceT as ToMut<'a>>::Output>>,
+        <<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output: IntoParIter<Item = <<SystemT as System>::InstanceT as ToMut<'a>>::Output>,
     {
         let (resolved_components, _) : (<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, _) = self.components.to_mut().sculpt();
         resolved_components.get_parallel_mut().for_each(SystemT::update_instance);
@@ -148,18 +151,20 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::iter::Zip;
     use std::ops::{Add, AddAssign};
     use frunk_core::{hlist, generic::Generic};
+    use nalgebra::vector;
     use super::*;
 
-    #[derive(Copy, Clone, Default, Generic)]
+    #[derive(Copy, Clone, Default, Generic, Debug)]
     pub struct Transform {
         position: SVector<f32, 3>,
         rotation: Quaternion<f32>,
         scale: SVector<f32, 3>
     }
 
-    #[derive(Copy, Clone, Default, Generic)]
+    #[derive(Copy, Clone, Default, Generic, Debug)]
     pub struct DeltaTransform {
         position: SVector<f32, 3>,
         rotation: Quaternion<f32>,
@@ -184,7 +189,7 @@ mod test {
         }
     }
     
-    #[derive(Copy, Clone, Default, Generic)]
+    #[derive(Copy, Clone, Default, Generic, Debug)]
 
     pub struct Model {
         // TODO
@@ -225,30 +230,37 @@ mod test {
 
     #[test]
     fn test_ecs() {
-        type TestSystem = RenderSystem;
-        type TestArchetype = Archetype<<Tile as frunk::Generic>::Repr>;
+        type TestSystem = MovementSystem;
+        type TestArchetype = Archetype<<Unit as frunk::Generic>::Repr>;
         
+        let delta_transform_base = DeltaTransform {
+            position: vector![-10.0,4.0,2.0],
+            rotation: Default::default(),
+            scale: vector![1.0, 1.0, 1.0]
+        };
         let transform_base = Transform::default();
         let model_base = Model{};
+        const COMPONENT_SIZE: usize = 10;
         
         let mut test_arch: TestArchetype = Archetype {
             entity_list: vec![0,1,2,3].into_iter().map(|x| (x as usize).into()).collect(),
             components: hlist![
-                std::iter::repeat_n(transform_base, 4).collect(),
-                std::iter::repeat_n(model_base, 4).collect(),
+                std::iter::repeat_n(transform_base, COMPONENT_SIZE).collect(),
+                std::iter::repeat_n(delta_transform_base, COMPONENT_SIZE).collect(),
+                std::iter::repeat_n(model_base, COMPONENT_SIZE).collect(),
             ]
         };
         
-        let x = test_arch.components.sculpt::<<<Tile as frunk::Generic>::Repr as ToComponentList>::Output, _>();
+        println!("{:?}", test_arch.components);
         
-        test_arch.apply_system::<TestSystem, frunk::indices::IdentityTransMog>();
+        test_arch.apply_system::<TestSystem, _>();
+
+        println!("{:?}", test_arch.components);
         
         // test_world.archetypes.to_mut().foldl(poly_fn![
         //     [T] | x: &mut Archetype<T> | -> () { x.apply_system::<MovementSystem, _>() },
         // ], &mut test_world.systems.head);
         // test_world.archetypes.to_mut().map(Poly(ArchMap));
-
-        assert!(false, "YAY!");
     }
     
     // #[test]
