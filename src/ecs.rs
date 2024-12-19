@@ -92,6 +92,8 @@ impl <T: ToComponentList + for<'a> ToMut<'a>, TailT: ArchetypeList> ArchetypeLis
     }
 }
 
+
+#[allow(non_snake_case)]
 #[macro_export]
 macro_rules! Archetype {
     [$inner_type:ty] => {
@@ -120,6 +122,10 @@ struct World<SystemListT: SystemList, ArchetypeListT: ArchetypeList + Default> {
     archetypes: ArchetypeListT,
 }
 
+impl <SystemListT: SystemList, ArchetypeListT: ArchetypeList + Default> World<SystemListT, ArchetypeListT> {
+    
+}
+
 struct ParallelArrayZip;
 
 impl <AccT: IndexedParallelIterator<Item: HList>, InputT: IndexedParallelIterator> Func<(AccT, InputT)> for ParallelArrayZip {
@@ -131,22 +137,22 @@ impl <AccT: IndexedParallelIterator<Item: HList>, InputT: IndexedParallelIterato
 }
 
 trait CanApplySystem<'a, SystemT: System, Indices> {
-    fn apply_system(&'a mut self);
+    fn apply_system(&'a mut self, system: &mut SystemT);
 }
 
-impl <'a, SystemT: System, Indices, ArchetypeListT, EntityT> CanApplySystem<'a, SystemT, Indices> for Archetype<ArchetypeListT, EntityT>
+impl <'a, SystemT, IndicesT, ArchetypeListT, EntityT> CanApplySystem<'a, SystemT, IndicesT> for Archetype<ArchetypeListT, EntityT>
 where
     ArchetypeListT: ToComponentList,
     EntityT: From<usize>,
     ArchetypeListT: ToComponentList + ToMut<'a>,
     <ArchetypeListT as ToComponentList>::Output: ToMut<'a>,
-    <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: Sculptor<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, Indices>,
+    <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: Sculptor<<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, IndicesT>,
     SystemT: System,
     <SystemT as System>::InstanceT: ToMut<'a> + ToComponentList,
     <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a>,
     <<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output: IntoParIter<Item = <<SystemT as System>::InstanceT as ToMut<'a>>::Output>,
 {
-    fn apply_system(&'a mut self) {
+    fn apply_system(&'a mut self, _system: &mut SystemT) {
         let (resolved_components, _) : (<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, _) = self.components.to_mut().sculpt();
         resolved_components.get_parallel_mut().for_each(SystemT::update_instance);
     }
@@ -158,26 +164,46 @@ where
     EntityT: From<usize>,
 {
     // Mutable reference to system is for
-    fn apply_system<'a, SystemT: System, Indices>(&'a mut self)
+    fn apply_system<'a, SystemT: System, Indices: HList>(&'a mut self, system: &mut SystemT)
     where
         Self: CanApplySystem<'a, SystemT, Indices>
     {
-        CanApplySystem::<'a, SystemT, Indices>::apply_system(self)
+        CanApplySystem::<'a, SystemT, Indices>::apply_system(self, system)
     }
 }
 
 trait CanApplySystemList<'a, SystemT: System, IndicesList> {
-    fn apply_system(&'a mut self);
+    fn apply_system_to_list(&'a mut self, system: &mut SystemT);
 }
 
 impl <'a, SystemT: System> CanApplySystemList<'a, SystemT, HNil> for HNil {
-    fn apply_system(&'a mut self) {}
+    fn apply_system_to_list(&'a mut self, system: &mut SystemT) {}
 }
 
-impl <'a, HeadIndicesT, TailIndicesT, SystemT: System, HeadT: CanApplySystem<'a, SystemT, HeadIndicesT>, TailT: CanApplySystemList<'a, SystemT, TailIndicesT>> CanApplySystemList<'a, SystemT, HCons<HeadIndicesT, TailIndicesT>> for HCons<HeadT, TailT> {
-    fn apply_system(&'a mut self) {
-        self.head.apply_system();
-        self.tail.apply_system();
+impl <
+    'a,
+    HeadIndicesHeadT,
+    HeadIndicesTailT: HList,
+    TailIndicesT,
+    SystemT: System,
+    HeadT: CanApplySystem<'a, SystemT, HCons<HeadIndicesHeadT, HeadIndicesTailT>>,
+    TailT: CanApplySystemList<'a, SystemT, TailIndicesT>
+> CanApplySystemList<'a, SystemT, HCons<HCons<HeadIndicesHeadT, HeadIndicesTailT>, TailIndicesT>> for HCons<HeadT, TailT> {
+    fn apply_system_to_list(&'a mut self, system: &mut SystemT) {
+        self.head.apply_system(system);
+        self.tail.apply_system_to_list(system);
+    }
+}
+
+impl <
+    'a,
+    TailIndicesT,
+    SystemT: System,
+    HeadT,
+    TailT: CanApplySystemList<'a, SystemT, TailIndicesT>
+> CanApplySystemList<'a, SystemT, HCons<HNil, TailIndicesT>> for HCons<HeadT, TailT> {
+    fn apply_system_to_list(&'a mut self, system: &mut SystemT) {
+        self.tail.apply_system_to_list(system);
     }
 }
 
@@ -285,13 +311,6 @@ mod test {
             ]
         };
 
-        let DELTA_TRANSFORM_BASE = DeltaTransform {
-            position: vector![-10.0,4.0,2.0],
-            rotation: Default::default(),
-            scale: vector![1.0, 1.0, 1.0]
-        };
-        let TRANSFORM_BASE = Transform::default();
-        let MODEL_BASE = Model{};
         const COMPONENT_SIZE_TILE: usize = 10;
 
         let tile_arch: Archetype![Tile] = Archetype {
@@ -306,7 +325,10 @@ mod test {
         
         println!("{:?}", arches.get::<Archetype![Unit],_>().components);
 
-        CanApplySystemList::<MovementSystem, _>::apply_system(&mut arches);
+        arches.get_mut::<Archetype![Unit], _>().apply_system::<MovementSystem, _>(&mut MovementSystem);
+        arches.get_mut::<Archetype![Tile], _>().apply_system::<MovementSystem, _>(&mut MovementSystem);
+        
+        HCons::apply_system_to_list(&mut arches, &mut MovementSystem);
 
         println!("{:?}", arches.get::<Archetype![Unit],_>().components);
     }
