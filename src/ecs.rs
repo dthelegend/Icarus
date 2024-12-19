@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::process::Output;
 use frunk::{Generic, HCons, HList, HNil};
 use frunk::prelude::*;
@@ -137,7 +138,7 @@ impl <AccT: IndexedParallelIterator<Item: HList>, InputT: IndexedParallelIterato
 }
 
 trait CanApplySystem<'a, SystemT: System, Indices> {
-    fn apply_system(&'a mut self, system: &mut SystemT);
+    fn apply_system(&'a mut self);
 }
 
 impl <'a, SystemT, IndicesT, ArchetypeListT, EntityT> CanApplySystem<'a, SystemT, IndicesT> for Archetype<ArchetypeListT, EntityT>
@@ -152,7 +153,7 @@ where
     <<SystemT as System>::InstanceT as ToComponentList>::Output: ToMut<'a>,
     <<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output: IntoParIter<Item = <<SystemT as System>::InstanceT as ToMut<'a>>::Output>,
 {
-    fn apply_system(&'a mut self, _system: &mut SystemT) {
+    fn apply_system(&'a mut self) {
         let (resolved_components, _) : (<<<SystemT as System>::InstanceT as ToComponentList>::Output as ToMut<'a>>::Output, _) = self.components.to_mut().sculpt();
         resolved_components.get_parallel_mut().for_each(SystemT::update_instance);
     }
@@ -168,45 +169,26 @@ where
     where
         Self: CanApplySystem<'a, SystemT, Indices>
     {
-        CanApplySystem::<'a, SystemT, Indices>::apply_system(self, system)
+        CanApplySystem::<'a, SystemT, Indices>::apply_system(self)
     }
 }
 
-trait CanApplySystemList<'a, SystemT: System, IndicesList> {
-    fn apply_system_to_list(&'a mut self, system: &mut SystemT);
-}
+struct SystemApplicator<SystemT: System, Indices>(SystemT, PhantomData<Indices>);
 
-impl <'a, SystemT: System> CanApplySystemList<'a, SystemT, HNil> for HNil {
-    fn apply_system_to_list(&'a mut self, system: &mut SystemT) {}
-}
+impl <SystemT: System, Indices, T: for<'a> CanApplySystem<'a, SystemT, Indices>> Func<T> for SystemApplicator<SystemT, Indices> {
+    type Output = ();
 
-impl <
-    'a,
-    HeadIndicesHeadT,
-    HeadIndicesTailT: HList,
-    TailIndicesT,
-    SystemT: System,
-    HeadT: CanApplySystem<'a, SystemT, HCons<HeadIndicesHeadT, HeadIndicesTailT>>,
-    TailT: CanApplySystemList<'a, SystemT, TailIndicesT>
-> CanApplySystemList<'a, SystemT, HCons<HCons<HeadIndicesHeadT, HeadIndicesTailT>, TailIndicesT>> for HCons<HeadT, TailT> {
-    fn apply_system_to_list(&'a mut self, system: &mut SystemT) {
-        self.head.apply_system(system);
-        self.tail.apply_system_to_list(system);
+    fn call(mut i: T) -> Self::Output {
+        i.apply_system()
     }
 }
 
-impl <
-    'a,
-    TailIndicesT,
-    SystemT: System,
-    HeadT,
-    TailT: CanApplySystemList<'a, SystemT, TailIndicesT>
-> CanApplySystemList<'a, SystemT, HCons<HNil, TailIndicesT>> for HCons<HeadT, TailT> {
-    fn apply_system_to_list(&'a mut self, system: &mut SystemT) {
-        self.tail.apply_system_to_list(system);
+impl <SystemT: System, Indices, T> Func<T> for SystemApplicator<SystemT, Indices> {
+    type Output = ();
+
+    fn call(i: T) -> Self::Output {
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -324,11 +306,12 @@ mod test {
         let mut arches = hlist![unit_arch, tile_arch];
         
         println!("{:?}", arches.get::<Archetype![Unit],_>().components);
-
-        arches.get_mut::<Archetype![Unit], _>().apply_system::<MovementSystem, _>(&mut MovementSystem);
-        arches.get_mut::<Archetype![Tile], _>().apply_system::<MovementSystem, _>(&mut MovementSystem);
         
-        HCons::apply_system_to_list(&mut arches, &mut MovementSystem);
+        arches.map(Poly(SystemApplicator));
+        // arches.get_mut::<Archetype![Unit], _>().apply_system::<MovementSystem, _>(&mut MovementSystem);
+        // arches.get_mut::<Archetype![Tile], _>().apply_system::<MovementSystem, _>(&mut MovementSystem);
+        
+        // HCons::apply_system_to_list(&mut arches, &mut MovementSystem);
 
         println!("{:?}", arches.get::<Archetype![Unit],_>().components);
     }
