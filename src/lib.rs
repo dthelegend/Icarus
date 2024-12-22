@@ -1,6 +1,6 @@
 #![feature(associated_type_defaults)]
 #![feature(impl_trait_in_assoc_type)]
 
-mod grid;
-mod ecs;
-mod game;
+pub mod grid;
+pub mod ecs;
+pub mod game;

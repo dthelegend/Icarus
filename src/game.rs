@@ -53,7 +53,7 @@ impl GameBuilder {
         self.add_flag(sys::SDL_INIT_CAMERA)
     }
 
-    fn init(self) -> GameResult<GameSession> {
+    pub fn init(self) -> GameResult<GameSession> {
         let initialised_correctly = unsafe { sys::SDL_Init(self.flags) };
         if initialised_correctly {
             Ok(GameSession)
