@@ -13,4 +13,4 @@ frunk = { version = "0.4.3", features = ["std"] }
 frunk_core = "0.4.3"
 nalgebra = "0.33.2"
 rayon = "1.10.0"
-sdl3 = { path = "sdl3" }
+sdl3-sys = { path = "sdl3-sys" }
