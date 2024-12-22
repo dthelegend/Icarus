@@ -1,20 +1,22 @@
-use crate::sys;
-use crate::error::{get_error, SDLResult};
+mod error;
 
-pub struct SDLSessionBuilder {
+use sdl3_sys as sys;
+use error::{get_error, GameResult};
+
+pub struct GameBuilder {
     flags: u32,
 }
 
-impl Default for SDLSessionBuilder {
+impl Default for GameBuilder {
     fn default() -> Self { Self::new() }
 }
 
-impl SDLSessionBuilder {
-    pub const fn new() -> SDLSessionBuilder {
-        SDLSessionBuilder { flags: 0 }
+impl GameBuilder {
+    pub const fn new() -> GameBuilder {
+        GameBuilder { flags: 0 }
     }
 
-    const fn add_flag(mut self, flag: u32) -> SDLSessionBuilder {
+    const fn add_flag(mut self, flag: u32) -> GameBuilder {
         self.flags |= flag;
         self
     }
@@ -51,14 +53,14 @@ impl SDLSessionBuilder {
         self.add_flag(sys::SDL_INIT_CAMERA)
     }
 
-    fn init(self) -> SDLResult<SDLSession> {
+    fn init(self) -> GameResult<GameSession> {
         let initialised_correctly = unsafe { sys::SDL_Init(self.flags) };
         if initialised_correctly {
-            Ok(SDLSession)
+            Ok(GameSession)
         } else {
             Err(get_error())
         }
     }
 }
 
-struct SDLSession;
+struct GameSession;
