@@ -3,4 +3,6 @@
 
 pub mod grid;
 pub mod ecs;
-pub mod game;
+pub mod render;
+mod app;
+mod consts;
