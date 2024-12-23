@@ -10,8 +10,9 @@ use thiserror::Error;
 use winit::raw_window_handle::HasDisplayHandle;
 use crate::consts::{API_VERSION, ENGINE_NAME, ENGINE_VERSION};
 
-#[derive(Error)]
-enum AppError {
+#[derive(Error, Debug)]
+pub enum AppError {
+    #[error(transparent)]
     WindowEventError(#[from] winit::error::EventLoopError),
 }
 
@@ -86,7 +87,7 @@ impl ApplicationHandler for AppManager {
     }
 }
 
-fn main_loop() -> Result<(), AppError> {
+pub fn main_loop() -> Result<(), AppError> {
     let event_loop = EventLoop::new()?;
 
     let mut appman = AppManager::new();

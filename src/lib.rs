@@ -4,5 +4,5 @@
 pub mod grid;
 pub mod ecs;
 pub mod render;
-mod app;
+pub mod app;
 mod consts;
