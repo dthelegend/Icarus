@@ -1,5 +1,5 @@
-use nalgebra::SMatrix;
 use crate::grid::Grid;
+use nalgebra::SMatrix;
 
 // Axial Hex Grid implementation
 pub struct AxialHexGrid<T, const size: usize>(SMatrix<T, size, size>);

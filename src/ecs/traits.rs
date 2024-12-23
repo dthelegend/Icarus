@@ -1,9 +1,9 @@
-use rayon::prelude::*;
+use frunk::hlist::{HCons, HList, HNil};
 use frunk::prelude::*;
-use frunk::hlist::{HList, HCons, HNil};
 use frunk_core::HList;
 use frunk_core::hlist::Sculptor;
 use frunk_core::traits::ToMut;
+use rayon::prelude::*;
 
 // Seal these traits
 trait Sealed {}
@@ -15,8 +15,7 @@ impl<T, U> Sealed for HCons<T, U> {}
 pub trait ComponentList: HList + Sealed {}
 
 impl ComponentList for HNil {}
-impl<HeadT, TailT: ComponentList> ComponentList for HCons<super::ComponentStorage<HeadT>, TailT>
-{}
+impl<HeadT, TailT: ComponentList> ComponentList for HCons<super::ComponentStorage<HeadT>, TailT> {}
 
 /// A trait to convert a heterogeneous list into a `ComponentList`
 pub trait ToComponentList: HList + Sealed {
@@ -27,7 +26,7 @@ impl ToComponentList for HNil {
     type Output = HNil;
 }
 
-impl <HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT> {
+impl<HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT> {
     type Output = HCons<super::ComponentStorage<HeadT>, <TailT as ToComponentList>::Output>;
 }
 
@@ -35,28 +34,33 @@ impl <HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT> {
 pub trait IntoParIter: HList + Sealed {
     type Item: HList + Send;
 
-    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item=Self::Item>;
+    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item>;
 }
 
 impl<HeadT> IntoParIter for HCons<HeadT, HNil>
 where
     HeadT: IntoParallelIterator<Iter: IndexedParallelIterator>,
-    <HeadT as IntoParallelIterator>::Item: Send
+    <HeadT as IntoParallelIterator>::Item: Send,
 {
     type Item = HList![<HeadT as IntoParallelIterator>::Item];
-    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item=Self::Item> {
-        rayon::iter::repeat(HNil).zip(self.head.into_par_iter()).map(|(hnil, x)| hnil.prepend(x))
+    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item> {
+        rayon::iter::repeat(HNil)
+            .zip(self.head.into_par_iter())
+            .map(|(hnil, x)| hnil.prepend(x))
     }
 }
 
 impl<HeadT, TailT: IntoParIter> IntoParIter for HCons<HeadT, TailT>
 where
     HeadT: IntoParallelIterator<Iter: IndexedParallelIterator>,
-    <HeadT as IntoParallelIterator>::Item: Send
+    <HeadT as IntoParallelIterator>::Item: Send,
 {
     type Item = HList![<HeadT as IntoParallelIterator>::Item, ...<TailT as IntoParIter>::Item];
-    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item=Self::Item> {
-        self.tail.get_parallel_mut().zip(self.head.into_par_iter()).map(|(tail, head)| tail.prepend(head))
+    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item> {
+        self.tail
+            .get_parallel_mut()
+            .zip(self.head.into_par_iter())
+            .map(|(tail, head)| tail.prepend(head))
     }
 }
 

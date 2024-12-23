@@ -1,12 +1,11 @@
+use frunk::hlist::{HFoldLeftable, HMappable, Sculptor};
 use frunk::prelude::*;
-use frunk::hlist::{Sculptor, HFoldLeftable, HMappable};
 use frunk::traits::{Func, ToMut};
 use rayon::prelude::*;
 
 #[cfg(test)]
 mod test;
 mod traits;
-
 
 pub type ComponentStorage<T> = Vec<T>;
 
@@ -23,19 +22,19 @@ impl From<usize> for Entity {
 }
 
 #[derive(Default)]
-pub struct Archetype<ComponentListT: traits::ToComponentList, EntityT : From<usize> = Entity> {
+pub struct Archetype<ComponentListT: traits::ToComponentList, EntityT: From<usize> = Entity> {
     entity_list: ComponentStorage<EntityT>,
-    components: ComponentListT::Output
+    components: ComponentListT::Output,
 }
 
-impl <ArchetypeListT, EntityT> Archetype<ArchetypeListT, EntityT>
+impl<ArchetypeListT, EntityT> Archetype<ArchetypeListT, EntityT>
 where
     ArchetypeListT: traits::ToComponentList,
     EntityT: From<usize>,
 {
     fn apply_system<'a, SystemT: System, Indices>(&'a mut self)
     where
-        Self: traits::CanApplySystem<'a, SystemT, Indices>
+        Self: traits::CanApplySystem<'a, SystemT, Indices>,
     {
         traits::CanApplySystem::<'a, SystemT, Indices>::apply_system(self)
     }
