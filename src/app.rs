@@ -1,29 +1,28 @@
 use std::ffi::CStr;
 use crate::consts::{API_VERSION, ENGINE_NAME, ENGINE_VERSION};
-use ash::Entry;
 use ash::vk;
 use ash::vk::InstanceCreateFlags;
 use std::ptr;
-use log::{error, info};
+use ash::prelude::VkResult;
+use log::{debug, error, info};
 use thiserror::Error;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle};
+use winit::raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle};
 use winit::window::{Window, WindowId};
 
 #[derive(Error, Debug)]
 pub enum AppError {
-    #[error(transparent)]
+    #[error("window event loop error")]
     WindowEventError(#[from] winit::error::EventLoopError),
+    #[error("failed to acquire raw window handle")]
+    HandleError(#[from] HandleError),
+    #[error("vulkan error ({0})")]
+    VulkanError(#[from] vk::Result),
 }
 
-pub struct AppManager {
-    _entry: Entry,
-    app_instance: Option<AppInstance>,
-    app_config: AppConfig,
-}
-
+// Config
 // TODO make this constructible using a builder
 pub struct AppConfig {
     app_name: &'static CStr
@@ -37,78 +36,116 @@ impl Default for AppConfig {
     }
 }
 
-impl AppManager {
-    pub fn from_config(app_config: AppConfig) -> AppManager {
-        let ash_entry = Entry::linked();
-
-        AppManager {
-            _entry: ash_entry,
-            app_instance: None,
-            app_config,
-        }
-    }
-}
-
-impl Default for AppManager {
-    fn default() -> AppManager {
-        Self::from_config(AppConfig::default())
-    }
-}
-
-pub struct AppInstance {
-    window: Window,
+// App manager produces instances
+pub struct AppManager<'a> {
+    _entry: ash::Entry,
+    app_config: AppConfig,
+    event_loop: EventLoop<()>,
     vulkan_instance: ash::Instance,
+    display_handle: DisplayHandle<'a>
 }
 
-impl ApplicationHandler for AppManager {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window = match event_loop.create_window(Window::default_attributes().with_title("TODO Replace with title")) {
-            Ok(window) => window,
-            Err(e) => {
-                info!("Failed to create Window! {e}");
-                return;
-            }
-        };
-
-        let app_name = c"TODO Replace with title";
+impl <'a> AppManager<'a> {
+    pub fn from_config(app_config: AppConfig) -> Result<AppManager<'a>, AppError> {
+        let event_loop = EventLoop::new()?;
+        let ash_entry = ash::Entry::linked();
 
         let app_info = vk::ApplicationInfo::default()
             .engine_name(ENGINE_NAME)
             .engine_version(ENGINE_VERSION)
             .api_version(API_VERSION)
-            .application_name(app_name)
+            .application_name(app_config.app_name)
             .application_version(0);
 
-        let surface_extensions = match event_loop.display_handle() {
-            Ok(display_handle) =>
-                match ash_window::enumerate_required_extensions(display_handle.as_raw()) {
-                    Ok(extensions) => extensions,
-                    Err(e) => {
-                        error!("Failed to query Window extensions! {e}");
-                        return;
-                    }
-                }
-            Err(handle_error) => {
-                error!("Failed to acquire display handle! {handle_error}");
-                return;
-            }
-        };
+        let display_handle = event_loop.display_handle()?;
+        let surface_extensions = ash_window::enumerate_required_extensions(display_handle.as_raw())?;
 
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info)
             .enabled_extension_names(surface_extensions);
 
-        let vulkan_instance = match unsafe { self._entry.create_instance(&create_info, None) } {
-            Ok(vulkan_instance) => vulkan_instance,
+        let vulkan_instance = unsafe { ash_entry.create_instance(&create_info, None) }?;
+
+        Ok(AppManager {
+            _entry: ash_entry,
+            app_config,
+            event_loop,
+            vulkan_instance,
+            display_handle
+        })
+    }
+
+    pub fn run(self) -> Result<(), AppError> {
+        let mut handler = AppHandler {
+            _entry: self._entry,
+            vulkan_instance: self.vulkan_instance,
+            display_handle: self.display_handle,
+            resources: None
+        };
+
+        self.event_loop.run_app(&mut handler).map_err(From::from)
+    }
+}
+
+impl <'a> Drop for AppManager<'a> {
+    fn drop(&mut self) {
+        unsafe { self.vulkan_instance.destroy_instance(None); }
+    }
+}
+
+struct AppResources {
+    window: Window,
+    surface: vk::SurfaceKHR,
+}
+
+struct AppHandler<'a> {
+    _entry: ash::Entry,
+    vulkan_instance: ash::Instance,
+    display_handle: DisplayHandle<'a>,
+    resources: Option<AppResources>,
+}
+
+impl <'a> ApplicationHandler for AppHandler<'a> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let window = match event_loop.create_window(Window::default_attributes().with_title("TODO Replace with title")) {
+            Ok(window) => window,
             Err(e) => {
-                error!("Failed to create Vulkan instance! {e}");
+                error!("Failed to create Window! {e}");
                 return;
             }
         };
 
-        self.app_instance = Some(AppInstance {
+        debug!("Created a new window ({:?})", window.id());
+
+        let window_handle = match window.window_handle() {
+            Ok(window_handle) => window_handle,
+            Err(e) => {
+                error!("Failed to get window handle! {e}");
+                return;
+            }
+        };
+
+        let surface_result = unsafe {
+            ash_window::create_surface(
+                &self._entry,
+                &self.vulkan_instance,
+                self.display_handle.as_raw(),
+                window_handle.as_raw(),
+                None,
+            )
+        };
+
+        let surface = match surface_result {
+            Ok(surface) => surface,
+            Err(e) => {
+                error!("Failed to create a window surface! {e}");
+                return;
+            }
+        };
+
+        self.resources = Some(AppResources {
             window,
-            vulkan_instance,
+            surface,
         });
     }
 
@@ -124,9 +161,22 @@ impl ApplicationHandler for AppManager {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                self.app_instance.as_ref().unwrap().window.request_redraw();
+                self.resources.as_ref().unwrap().window.request_redraw();
             }
             _ => (),
+        }
+    }
+
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        let resources = None;
+        (self.resources, resources) = (resources, self.resources);
+        match resources {
+            Some(app_resources) => {
+                unsafe {
+                    self.vulkan_instance.destroy_instance(app_resources.surface, None)
+                }
+            }
+            None => {}
         }
     }
 }
