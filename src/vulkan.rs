@@ -1,6 +1,6 @@
 use ash::prelude::VkResult;
 use log::{debug, log, log_enabled, warn};
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 use ash::vk;
 use ash::vk::{DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCreateInfoEXT};
@@ -56,29 +56,42 @@ impl VulkanInstance {
         let surface_extensions = ash_window::enumerate_required_extensions(display_handle.as_raw())?;
 
         let mut create_info = vk::InstanceCreateInfo::default()
-            .application_info(&app_info);
+            .application_info(&app_info)
+            .enabled_extension_names(surface_extensions);
 
         let vulkan_instance = if cfg!(debug_assertions) && Self::is_validation_layer_support_available(&ash_entry)? {
             // Check if all required validation layers are available
             debug!("Validation layer support is available");
+            // Todo VK_EXT_debug_utils
+            let severity = {
+                DebugUtilsMessageSeverityFlagsEXT::WARNING
+                    | DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+                    | DebugUtilsMessageSeverityFlagsEXT::INFO
+                    | DebugUtilsMessageSeverityFlagsEXT::ERROR
+            };
 
-            let mut surface_extensions_plus = Vec::from(surface_extensions);
-            surface_extensions_plus.extend(Self::REQUIRED_VALIDATION_LAYERS.into_iter().map(CStr::as_ptr));
-            let surface_extensions_plus_boxed = surface_extensions_plus.into_boxed_slice();
-            let mut debug_msg_info = Self::create_debug_msg_info();
+            let message_type = {
+                DebugUtilsMessageTypeFlagsEXT::GENERAL
+                    | DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
+                    | DebugUtilsMessageTypeFlagsEXT::VALIDATION
+            };
+
+            let mut debug_msg_info = DebugUtilsMessengerCreateInfoEXT::default()
+                .message_severity(severity)
+                .message_type(message_type)
+                .pfn_user_callback(Some(vulkan_debug_utils_callback));
+
+            let validation_ptrs = VulkanInstance::REQUIRED_VALIDATION_LAYERS.map(CStr::as_ptr);
 
             create_info = create_info
                 .push_next(&mut debug_msg_info)
-                .enabled_extension_names(&surface_extensions_plus_boxed);
+                .enabled_layer_names(&validation_ptrs);
 
             unsafe { ash_entry.create_instance(&create_info, None) }?
         } else {
             if cfg!(debug_assertions) {
                 warn!("Validation layer support is not available");
             }
-            create_info = create_info
-                .enabled_extension_names(surface_extensions);
-
             unsafe { ash_entry.create_instance(&create_info, None) }?
         };
 
@@ -93,26 +106,6 @@ impl VulkanInstance {
     const REQUIRED_VALIDATION_LAYERS: [&'static CStr; 1] = [
         c"VK_LAYER_KHRONOS_validation"
     ];
-
-    fn create_debug_msg_info<'a>() -> DebugUtilsMessengerCreateInfoEXT<'a> {
-        let severity = {
-            DebugUtilsMessageSeverityFlagsEXT::WARNING
-                | DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-                | DebugUtilsMessageSeverityFlagsEXT::INFO
-                | DebugUtilsMessageSeverityFlagsEXT::ERROR
-        };
-
-        let message_type = {
-            DebugUtilsMessageTypeFlagsEXT::GENERAL
-                | DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
-                | DebugUtilsMessageTypeFlagsEXT::VALIDATION
-        };
-
-        DebugUtilsMessengerCreateInfoEXT::default()
-            .message_severity(severity)
-            .message_type(message_type)
-            .pfn_user_callback(Some(vulkan_debug_utils_callback))
-    }
 
     fn is_validation_layer_support_available(entry: &ash::Entry) -> Result<bool, VulkanError> {
         // if support validation layer, then return true
