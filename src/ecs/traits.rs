@@ -1,8 +1,6 @@
-use frunk::hlist::{HCons, HList, HNil};
-use frunk::prelude::*;
-use frunk_core::HList;
-use frunk_core::hlist::Sculptor;
-use frunk_core::traits::ToMut;
+use frunk::hlist::{HCons, HList, HNil, Sculptor};
+use frunk::ToMut;
+use frunk::HList;
 use rayon::prelude::*;
 
 // Seal these traits

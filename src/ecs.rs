@@ -1,7 +1,4 @@
-use frunk::hlist::{HFoldLeftable, HMappable, Sculptor};
-use frunk::prelude::*;
-use frunk::traits::{Func, ToMut};
-use rayon::prelude::*;
+use frunk::traits::ToMut;
 
 #[cfg(test)]
 mod test;
