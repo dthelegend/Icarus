@@ -134,10 +134,14 @@ impl AppCapabilities {
             PhysicalDeviceType::VirtualGpu => 3,
             PhysicalDeviceType::Other => 2,
             PhysicalDeviceType::Cpu => 1,
-            _ => return None
+            _ => { return None; }
         };
 
-        let _ = physical_device.surface_capabilities(&surface, Default::default()).ok()?;
+        let _caps = physical_device.surface_capabilities(&surface, Default::default()).ok()?;
+
+        if physical_device.surface_formats(surface, Default::default()).ok()?.len() == 0 {
+            return None;
+        }
 
         is_required_device_support_available(physical_device).then_some(
             AppCapabilities {
@@ -313,7 +317,11 @@ impl ApplicationHandler for AppHandler {
                 .surface_formats(&vulkan_surface, Default::default());
             
             match sfmts_result {
-                Ok(sfmts) => sfmts,
+                Ok(sfmts) => {
+                    debug!("Available image formats:\n{}", sfmts.iter().map(|(format, colorspace)| format!(" - {format:?}|{colorspace:?}", )).collect::<Vec<_>>().join("\n"));
+
+                    sfmts.into_iter().next().expect("This should already have been checked")
+                },
                 Err(e) => {
                     error!("Failed to get surface formats! {e}");
                     event_loop.exit();
@@ -323,7 +331,6 @@ impl ApplicationHandler for AppHandler {
         };
 
         debug!("Using {} images in Swapchain", no_images);
-        debug!("Available image formats:\n{}", image_format.iter().map(|(format, colorspace)| format!(" - {format:?}|{colorspace:?}", )).collect::<Vec<_>>().join("\n"));
 
         let (swapchain, images) = {
             let swp_result = Swapchain::new(
@@ -331,7 +338,7 @@ impl ApplicationHandler for AppHandler {
                 vulkan_surface.clone(),
                 SwapchainCreateInfo {
                     min_image_count: no_images,
-                    image_format: image_format[0].0,
+                    image_format: image_format.0,
                     image_extent: window.inner_size().into(),
                     image_usage: ImageUsage::COLOR_ATTACHMENT,
                     composite_alpha,
