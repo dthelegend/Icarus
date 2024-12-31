@@ -3,7 +3,7 @@ use log::{debug, log, Level};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessengerCallback, DebugUtilsMessengerCallbackData, DebugUtilsMessengerCreateInfo};
 use vulkano::instance::InstanceExtensions;
 use vulkano::{VulkanError, VulkanLibrary};
-use vulkano::device::DeviceExtensions;
+use vulkano::device::{DeviceExtensions, DeviceFeatures};
 use vulkano::device::physical::PhysicalDevice;
 
 const INSTANCE_EXTENSIONS: InstanceExtensions = InstanceExtensions {
@@ -55,7 +55,7 @@ fn vulkan_debug_utils_callback(
     log!(target: target, log_level, "{}", data.message)
 }
 
-pub fn is_required_layer_support_available(vk_lib: Arc<VulkanLibrary>) -> Result<bool, VulkanError> {
+pub fn is_required_layer_support_available(vk_lib: &Arc<VulkanLibrary>) -> Result<bool, VulkanError> {
     // if support validation layer, then return true
     let layer_property_list: Vec<_> = vk_lib.layer_properties()?.collect();
 
@@ -75,6 +75,19 @@ const REQUIRED_DEVICE_EXTENSIONS : DeviceExtensions = DeviceExtensions {
     ..DeviceExtensions::empty()
 };
 
-pub fn is_required_device_features_support_available(physical_device: Arc<PhysicalDevice>) -> bool {
+const REQUIRED_DEVICE_FEATURES : DeviceFeatures = DeviceFeatures {
+    ..DeviceFeatures::empty()
+};
+
+pub fn is_required_device_support_available(physical_device: &Arc<PhysicalDevice>) -> bool {
     physical_device.supported_extensions().contains(&REQUIRED_DEVICE_EXTENSIONS)
+    && physical_device.supported_features().contains(&REQUIRED_DEVICE_FEATURES)
+}
+
+pub const fn get_required_device_extensions() -> DeviceExtensions {
+    REQUIRED_DEVICE_EXTENSIONS
+}
+
+pub const fn get_required_device_features() -> DeviceFeatures {
+    REQUIRED_DEVICE_FEATURES
 }

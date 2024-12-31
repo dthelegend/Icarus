@@ -1,8 +1,13 @@
+use std::cmp::{max, min};
 use std::sync::Arc;
 use log::{error, debug, info};
 use thiserror::Error;
 use vulkano::{LoadingError, Validated, VulkanError, VulkanLibrary};
-use vulkano::device::physical::PhysicalDevice;
+use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFamilyProperties, QueueFlags};
+use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
+use vulkano::format::Format;
+use vulkano::image::{Image, ImageUsage};
+use vulkano::swapchain::{ColorSpace, Swapchain, SwapchainCreateInfo};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo};
 use vulkano::swapchain::Surface;
@@ -13,7 +18,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::raw_window_handle::HandleError;
 use winit::window::{Window, WindowId};
-use crate::app::utils::{get_debug_utils_callback, get_required_instance_extensions, get_required_layers, is_required_device_features_support_available, is_required_layer_support_available};
+use crate::app::utils::{get_debug_utils_callback, get_required_device_extensions, get_required_device_features, get_required_instance_extensions, get_required_layers, is_required_device_support_available, is_required_layer_support_available};
 
 mod utils;
 
@@ -61,7 +66,7 @@ impl AppManager {
 
         let vk_lib = VulkanLibrary::new()?;
 
-        is_required_layer_support_available(vk_lib.clone())
+        is_required_layer_support_available(&vk_lib)
             .map_err(AppError::from)
             .and_then(|is_supported| is_supported.then_some(()).ok_or(AppError::VulkanMissingLayers))?;
         
@@ -105,26 +110,53 @@ impl AppManager {
 }
 
 struct AppCapabilities {
-    rtx: bool
+    // TODO populate
+    score: u32
 }
 
 impl AppCapabilities {
-    fn for_device(device: Arc<PhysicalDevice>) -> Option<Self> {
-        is_required_device_features_support_available(device.clone()).then_some(
+    fn required_features(&self) -> DeviceFeatures {
+        let all_features = get_required_device_features();
+        all_features
+    }
+
+    fn required_extensions(&self) -> DeviceExtensions {
+        let all_exts = get_required_device_extensions();
+        all_exts
+    }
+    
+    fn for_device_on_surface(physical_device: &Arc<PhysicalDevice>, surface: &Arc<Surface>) -> Option<Self> {
+        let mut score = 0;
+
+        score += match physical_device.clone().properties().device_type {
+            PhysicalDeviceType::DiscreteGpu => 5,
+            PhysicalDeviceType::IntegratedGpu => 4,
+            PhysicalDeviceType::VirtualGpu => 3,
+            PhysicalDeviceType::Other => 2,
+            PhysicalDeviceType::Cpu => 1,
+            _ => return None
+        };
+
+        let _ = physical_device.surface_capabilities(&surface, Default::default()).ok()?;
+
+        is_required_device_support_available(physical_device).then_some(
             AppCapabilities {
-                rtx: device.supported_extensions().nv_ray_tracing
+                score
             })
     }
 
-    fn score(&self) -> u32 {
-        if self.rtx { 1 } else { 0 }
-    }
+    fn score(&self) -> u32 { self.score }
 }
 
 struct AppResources {
     window: Arc<Window>,
     vulkan_surface: Arc<Surface>,
-    capabilities: AppCapabilities
+    capabilities: AppCapabilities,
+    device: Arc<Device>,
+    graphics_queue: Arc<Queue>,
+    present_queue: Arc<Queue>, // Graphics Q and Present Q may be the same
+    swapchain: Arc<Swapchain>,
+    images: Vec<Arc<Image>>,
 }
 
 struct AppHandler {
@@ -157,7 +189,7 @@ impl ApplicationHandler for AppHandler {
             }
         };
 
-        let (vulkan_device, capabilities) = {
+        let (physical_device, capabilities) = {
             let all_devices = match self.vulkan_instance.enumerate_physical_devices() {
                 Ok(devices) => devices,
                 Err(e) => {
@@ -169,7 +201,7 @@ impl ApplicationHandler for AppHandler {
 
             let best_device = all_devices
                 .filter_map(|physical_device|
-                    AppCapabilities::for_device(physical_device.clone())
+                    AppCapabilities::for_device_on_surface(&physical_device, &vulkan_surface)
                         .map(|app_capabilities| (physical_device, app_capabilities)))
                 .max_by_key(|(_physical_device, d)| d.score());
 
@@ -182,13 +214,150 @@ impl ApplicationHandler for AppHandler {
                 }
             }
         };
-        
-        // TODO Create logical device and queues
+
+        let graphics_queue_family_index = {
+            let qfi_opt = physical_device
+                .queue_family_properties()
+                .iter()
+                .position(|queue_family_properties| {
+                    queue_family_properties.queue_flags.contains(QueueFlags::GRAPHICS)
+                });
+
+            match qfi_opt {
+                Some(qfi) => qfi as u32,
+                None => {
+                    error!("Failed to find a suitable physical device!");
+                    event_loop.exit();
+                    return;
+                }
+            }
+        };
+
+        let present_queue_family_index = {
+            let qfi_result = physical_device
+                .queue_family_properties()
+                .iter()
+                .enumerate()
+                .find_map(|(idx, queue_family_properties)| {
+                    let idx32 = idx as u32;
+                    match physical_device.presentation_support(idx32, event_loop) {
+                        Ok(true) => Some(Ok(idx as u32)),
+                        Ok(false) => None,
+                        Err(e) => Some(Err(e))
+                    }
+                });
+
+            match qfi_result {
+                Some(Ok(qfi)) => qfi,
+                Some(Err(e)) => {
+                    error!("Failure while finding a physical device with present support! {e}");
+                    event_loop.exit();
+                    return;
+                }
+                None => {
+                    error!("Failed to find a physical device with present support!");
+                    event_loop.exit();
+                    return;
+                }
+            }
+        };
+
+        let mut queue_create_info = vec![QueueCreateInfo {
+            queue_family_index: graphics_queue_family_index,
+            ..QueueCreateInfo::default()
+        }];
+
+        if graphics_queue_family_index != present_queue_family_index {
+            queue_create_info.push(
+                QueueCreateInfo {
+                    queue_family_index: present_queue_family_index,
+                    ..QueueCreateInfo::default()
+                }
+            )
+        }
+
+        let (device, mut queues) = match Device::new(physical_device, DeviceCreateInfo {
+            enabled_features: capabilities.required_features(),
+            enabled_extensions: capabilities.required_extensions(),
+            queue_create_infos: queue_create_info,
+            ..DeviceCreateInfo::default()
+        }) {
+            Ok(device) => device,
+            Err(e) => {
+                error!("Failed to create a logical device! {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+
+        info!("Using device {}", device.physical_device().properties().device_name);
+
+        let graphics_queue = queues.next().unwrap();
+        let present_queue = queues.next().unwrap_or_else(|| graphics_queue.clone());
+
+        // TODO Create Swapchain
+        let surface_capabilities =
+            match device.physical_device().surface_capabilities(&vulkan_surface, Default::default()) {
+                Ok(caps) => caps,
+                Err(e) => {
+                    error!("Failed to get surface capabilities! {e}");
+                    event_loop.exit();
+                    return;
+                }
+            };
+
+        let no_images =  min(max(surface_capabilities.min_image_count, 3), surface_capabilities.max_image_count.unwrap_or(u32::MAX));
+        let composite_alpha = surface_capabilities.supported_composite_alpha.into_iter().next().unwrap();
+        let image_format =  {
+            let sfmts_result = device.physical_device()
+                .surface_formats(&vulkan_surface, Default::default());
+            
+            match sfmts_result {
+                Ok(sfmts) => sfmts,
+                Err(e) => {
+                    error!("Failed to get surface formats! {e}");
+                    event_loop.exit();
+                    return;
+                }
+            }
+        };
+
+        debug!("Using {} images in Swapchain", no_images);
+        debug!("Available image formats:\n{}", image_format.iter().map(|(format, colorspace)| format!(" - {format:?}|{colorspace:?}", )).collect::<Vec<_>>().join("\n"));
+
+        let (swapchain, images) = {
+            let swp_result = Swapchain::new(
+                device.clone(),
+                vulkan_surface.clone(),
+                SwapchainCreateInfo {
+                    min_image_count: no_images,
+                    image_format: image_format[0].0,
+                    image_extent: window.inner_size().into(),
+                    image_usage: ImageUsage::COLOR_ATTACHMENT,
+                    composite_alpha,
+                    ..SwapchainCreateInfo::default()
+                }
+            );
+
+            match swp_result {
+                Ok(swp) => swp,
+                Err(e) => {
+                    error!("Failed to create swapchain! {e}");
+                    event_loop.exit();
+                    return;
+                }
+            }
+        };
 
         self.resources = Some(AppResources {
             vulkan_surface,
             window,
-            capabilities
+            device,
+            capabilities,
+            graphics_queue,
+            present_queue,
+            swapchain,
+            images
         })
     }
 
