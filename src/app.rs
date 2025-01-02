@@ -6,10 +6,12 @@ use vulkano::{LoadingError, Validated, VulkanError, VulkanLibrary};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFamilyProperties, QueueFlags};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::format::Format;
-use vulkano::image::{Image, ImageUsage};
+use vulkano::image::{Image, ImageAspects, ImageSubresourceRange, ImageUsage};
+use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
 use vulkano::swapchain::{ColorSpace, Swapchain, SwapchainCreateInfo};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo};
+use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo};
 use vulkano::swapchain::Surface;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -161,6 +163,7 @@ struct AppResources {
     present_queue: Arc<Queue>, // Graphics Q and Present Q may be the same
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
+    frame_buffers: Vec<Arc<Framebuffer>>,
 }
 
 struct AppHandler {
@@ -356,6 +359,41 @@ impl ApplicationHandler for AppHandler {
             }
         };
 
+        let frame_buffers = {
+            let fb_result = images.iter().cloned().map(|image| {
+                let create_info = ImageViewCreateInfo {
+                    view_type: ImageViewType::Dim2d,
+                    subresource_range: ImageSubresourceRange {
+                        aspects: ImageAspects::COLOR,
+                        array_layers: 0..1,
+                        mip_levels: 0..1
+                    },
+                    .. ImageViewCreateInfo::from_image(&image)
+                };
+
+                let image_view = ImageView::new(image, create_info)?;
+                
+                Framebuffer::new(
+                    todo!(),
+                    FramebufferCreateInfo {
+                        attachments: vec![image_view],
+                        ..FramebufferCreateInfo::default()
+                    }
+                )
+            }).collect::<Result<Vec<_>, _>>();
+            
+            match fb_result {
+                Ok(fb) => fb,
+                Err(e) => {
+                    error!("Failed to create framebuffer! {e}");
+                    event_loop.exit();
+                    return;
+                }
+            }
+        };
+        
+        debug!("Successfully created application resources!");
+
         self.resources = Some(AppResources {
             vulkan_surface,
             window,
@@ -364,7 +402,8 @@ impl ApplicationHandler for AppHandler {
             graphics_queue,
             present_queue,
             swapchain,
-            images
+            images,
+            frame_buffers
         })
     }
 
@@ -380,7 +419,6 @@ impl ApplicationHandler for AppHandler {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                self.resources.as_ref().unwrap().window.request_redraw();
             }
             _ => (),
         }
@@ -388,5 +426,10 @@ impl ApplicationHandler for AppHandler {
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
         self.resources = None;
+        debug!("App resources nuked!");
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        todo!("rendering will happen here")
     }
 }
