@@ -17,3 +17,6 @@ rayon = "1.10.0"
 thiserror = "2.0.9"
 vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
 winit = { version = "0.30.6", features = ["rwh_05"] }
+
+[build-dependencies]
+spirv-builder = { git = "https://github.com/Rust-GPU/rust-gpu.git" }

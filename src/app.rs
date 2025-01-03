@@ -23,6 +23,7 @@ use winit::window::{Window, WindowId};
 use crate::app::utils::{get_debug_utils_callback, get_required_device_extensions, get_required_device_features, get_required_instance_extensions, get_required_layers, is_required_device_support_available, is_required_layer_support_available};
 
 mod utils;
+mod shaders;
 
 #[derive(Error, Debug)]
 pub enum AppError {
