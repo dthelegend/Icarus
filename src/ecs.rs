@@ -2,45 +2,82 @@ use frunk::traits::ToMut;
 
 #[cfg(test)]
 mod test;
-mod traits;
+pub mod traits;
+pub mod core;
+
+use crate::ecs::traits::ComponentList;
+pub use frunk::Generic as Archetype;
+use frunk_core::generic::Generic;
+use frunk_core::hlist::Sculptor;
 
 pub type ComponentStorage<T> = Vec<T>;
 
-trait System {
+pub trait System {
     type Components: for<'a> ToMut<'a>;
     fn update_instance(instance: <Self::Components as ToMut>::Output);
 }
 
+#[derive(Copy, Clone)]
 pub struct Entity(usize);
-impl From<usize> for Entity {
-    fn from(value: usize) -> Self {
-        Entity(value)
+
+impl Entity {
+    fn new(num: usize) -> Self {
+        Entity(num)
     }
 }
 
-#[derive(Default)]
-pub struct Archetype<ComponentListT: traits::ToComponentList, EntityT: From<usize> = Entity> {
-    entity_list: ComponentStorage<EntityT>,
-    components: ComponentListT::Output,
-}
 
-impl<ArchetypeListT, EntityT> Archetype<ArchetypeListT, EntityT>
+pub struct ArchetypeStorage<ArchetypeT>
 where
-    ArchetypeListT: traits::ToComponentList,
-    EntityT: From<usize>,
+    ArchetypeT: Generic,
+    <ArchetypeT as Generic>::Repr: ComponentList
 {
-    fn apply_system<'a, SystemT: System, Indices>(&'a mut self)
-    where
-        Self: traits::CanApplySystem<'a, SystemT, Indices>,
-    {
-        traits::CanApplySystem::<'a, SystemT, Indices>::apply_system(self)
+    entity_list: ComponentStorage<Entity>,
+    components: <<ArchetypeT as Generic>::Repr as ComponentList>::Storage,
+}
+
+impl <ArchetypeT> ArchetypeStorage<ArchetypeT>
+where
+    ArchetypeT: Generic,
+    <ArchetypeT as Generic>::Repr: ComponentList
+{
+    pub fn new() -> Self {
+        Self {
+            entity_list: ComponentStorage::new(),
+            components: <<ArchetypeT as Generic>::Repr as ComponentList>::new_storage(),
+        }
     }
 }
 
-#[allow(non_snake_case)]
-#[macro_export]
-macro_rules! Archetype {
-    [$inner_type:ty] => {
-        Archetype<<$inner_type as frunk::Generic>::Repr>
-    };
+impl <ArchetypeT: ComponentList> ArchetypeStorage<ArchetypeT>
+where
+    ArchetypeT: Generic,
+    <ArchetypeT as Generic>::Repr: ComponentList
+{
+    pub fn push(&mut self, instance: ArchetypeT) -> Entity
+    {
+        let entity = Entity::new(self.entity_list.len());
+        self.entity_list.push(entity);
+        <ArchetypeT as Generic>::Repr::push_to_storage(&mut self.components, instance.into());
+        
+        entity
+    }
+}
+
+impl <ArchetypeT> ArchetypeStorage<ArchetypeT>
+where
+    ArchetypeT: Generic,
+    <ArchetypeT as Generic>::Repr: ComponentList
+{
+    pub fn get_components<'a, SubArchetype, Indices>(&'a mut self) -> <<<SubArchetype as Generic>::Repr as ComponentList>::Storage as ToMut<'a>>::Output
+    where
+        SubArchetype: Generic,
+        <SubArchetype as Generic>::Repr: ComponentList,
+        <<ArchetypeT as Generic>::Repr as ComponentList>::Storage: ToMut<'a>,
+        <<SubArchetype as Generic>::Repr as ComponentList>::Storage: ToMut<'a>,
+        <<<ArchetypeT as Generic>::Repr as ComponentList>::Storage as ToMut<'a>>::Output: Sculptor<<<<SubArchetype as Generic>::Repr as ComponentList>::Storage as ToMut<'a>>::Output, Indices>
+    {
+        let (x, _ ) = self.components.to_mut().sculpt();
+        x
+    }
 }

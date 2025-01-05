@@ -1,10 +1,10 @@
-use std::sync::Arc;
 use log::{debug, log, Level};
+use std::sync::Arc;
+use vulkano::device::physical::PhysicalDevice;
+use vulkano::device::{DeviceExtensions, DeviceFeatures};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessengerCallback, DebugUtilsMessengerCallbackData, DebugUtilsMessengerCreateInfo};
 use vulkano::instance::InstanceExtensions;
 use vulkano::{VulkanError, VulkanLibrary};
-use vulkano::device::{DeviceExtensions, DeviceFeatures};
-use vulkano::device::physical::PhysicalDevice;
 
 const INSTANCE_EXTENSIONS: InstanceExtensions = InstanceExtensions {
     khr_surface: true,
@@ -68,26 +68,4 @@ pub fn is_required_layer_support_available(vk_lib: &Arc<VulkanLibrary>) -> Resul
     Ok(REQUIRED_LAYERS.into_iter().all(|x| {
         layer_property_list.iter().any(|y| y.name() == x)
     }))
-}
-
-const REQUIRED_DEVICE_EXTENSIONS : DeviceExtensions = DeviceExtensions {
-    khr_swapchain: true,
-    ..DeviceExtensions::empty()
-};
-
-const REQUIRED_DEVICE_FEATURES : DeviceFeatures = DeviceFeatures {
-    ..DeviceFeatures::empty()
-};
-
-pub fn is_required_device_support_available(physical_device: &Arc<PhysicalDevice>) -> bool {
-    physical_device.supported_extensions().contains(&REQUIRED_DEVICE_EXTENSIONS)
-    && physical_device.supported_features().contains(&REQUIRED_DEVICE_FEATURES)
-}
-
-pub const fn get_required_device_extensions() -> DeviceExtensions {
-    REQUIRED_DEVICE_EXTENSIONS
-}
-
-pub const fn get_required_device_features() -> DeviceFeatures {
-    REQUIRED_DEVICE_FEATURES
 }

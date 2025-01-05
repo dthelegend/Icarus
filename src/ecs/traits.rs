@@ -1,6 +1,7 @@
-use frunk::hlist::{HCons, HList, HNil, Sculptor};
-use frunk::ToMut;
+use crate::ecs::ComponentStorage;
+use frunk::hlist::{HCons, HList, HNil};
 use frunk::HList;
+use frunk_core::hlist;
 use rayon::prelude::*;
 
 // Seal these traits
@@ -10,76 +11,123 @@ impl Sealed for HNil {}
 impl<T, U> Sealed for HCons<T, U> {}
 
 /// A heterogeneous list of components storages
-pub trait ComponentList: HList + Sealed {}
+pub trait ComponentStorageList: HList + Sealed {
+}
 
-impl ComponentList for HNil {}
-impl<HeadT, TailT: ComponentList> ComponentList for HCons<super::ComponentStorage<HeadT>, TailT> {}
+impl <HeadT, TailT: ComponentStorageList> ComponentStorageList for HCons<ComponentStorage<HeadT>, TailT> {
+}
+
+impl <HeadT> ComponentStorageList for HCons<ComponentStorage<HeadT>, HNil> {
+}
 
 /// A trait to convert a heterogeneous list into a `ComponentList`
-pub trait ToComponentList: HList + Sealed {
-    type Output: ComponentList;
+pub trait ComponentList: HList + Sealed {
+    type Storage: ComponentStorageList;
+
+    fn new_storage() -> Self::Storage;
+    
+    fn push_to_storage(this: &mut Self::Storage, instance: Self);
+
+    fn swap_remove_from_storage(this: &mut Self::Storage, index: usize) -> Self;
 }
 
-impl ToComponentList for HNil {
-    type Output = HNil;
+impl <HeadT, TailT: ComponentList> ComponentList for HCons<HeadT, TailT> {
+    type Storage = HCons<ComponentStorage<HeadT>, <TailT as ComponentList>::Storage>;
+    
+    fn new_storage() -> Self::Storage {
+        hlist![ComponentStorage::new(), ...TailT::new_storage()]
+    }
+    
+    fn push_to_storage(storage: &mut Self::Storage, instance: Self) {
+        storage.head.push(instance.head);
+        TailT::push_to_storage(&mut storage.tail, instance.tail);
+    }
+
+    fn swap_remove_from_storage(this: &mut Self::Storage, index: usize) -> Self {
+        hlist![this.head.swap_remove(index), ...TailT::swap_remove_from_storage(&mut this.tail, index)]
+    }
 }
 
-impl<HeadT, TailT: ToComponentList> ToComponentList for HCons<HeadT, TailT> {
-    type Output = HCons<super::ComponentStorage<HeadT>, <TailT as ToComponentList>::Output>;
+impl <HeadT> ComponentList for HCons<HeadT, HNil> {
+    type Storage = HCons<ComponentStorage<HeadT>, HNil>;
+
+    fn new_storage() -> Self::Storage {
+        hlist![ComponentStorage::new()]
+    }
+
+    fn push_to_storage(this: &mut Self::Storage, instance: Self) {
+        this.head.push(instance.head);
+    }
+
+    fn swap_remove_from_storage(this: &mut Self::Storage, index: usize) -> Self {
+        hlist![this.head.swap_remove(index)]
+    }
 }
 
 /// A trait to provide a way to get a parallel iterator over a component storage
-pub trait IntoParIter: HList + Sealed {
+pub trait ToParIter: HList + Sealed {
     type Item: HList + Send;
 
-    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item>;
+    fn to_par_iter(self) -> impl IndexedParallelIterator<Item = Self::Item>;
 }
 
-impl<HeadT> IntoParIter for HCons<HeadT, HNil>
+impl<HeadT> ToParIter for HCons<HeadT, HNil>
 where
     HeadT: IntoParallelIterator<Iter: IndexedParallelIterator>,
     <HeadT as IntoParallelIterator>::Item: Send,
 {
     type Item = HList![<HeadT as IntoParallelIterator>::Item];
-    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item> {
+    fn to_par_iter(self) -> impl IndexedParallelIterator<Item = Self::Item> {
         rayon::iter::repeat(HNil)
             .zip(self.head.into_par_iter())
             .map(|(hnil, x)| hnil.prepend(x))
     }
 }
 
-impl<HeadT, TailT: IntoParIter> IntoParIter for HCons<HeadT, TailT>
+impl<HeadT, TailT: ToParIter> ToParIter for HCons<HeadT, TailT>
 where
     HeadT: IntoParallelIterator<Iter: IndexedParallelIterator>,
     <HeadT as IntoParallelIterator>::Item: Send,
 {
-    type Item = HList![<HeadT as IntoParallelIterator>::Item, ...<TailT as IntoParIter>::Item];
-    fn get_parallel_mut(self) -> impl IndexedParallelIterator<Item = Self::Item> {
+    type Item = HList![<HeadT as IntoParallelIterator>::Item, ...<TailT as ToParIter>::Item];
+    fn to_par_iter(self) -> impl IndexedParallelIterator<Item = Self::Item> {
         self.tail
-            .get_parallel_mut()
+            .to_par_iter()
             .zip(self.head.into_par_iter())
             .map(|(tail, head)| tail.prepend(head))
     }
 }
 
-pub trait CanApplySystem<'a, SystemT: super::System, Indices> {
-    fn apply_system(&'a mut self);
+/// A trait to provide a way to get a parallel iterator over a component storage
+pub trait ToIter: HList + Sealed {
+    type Item: HList + Send;
+
+    fn to_iter(self) -> impl Iterator<Item = Self::Item>;
 }
 
-impl <'a, SystemT: super::System, IndicesHead, IndicesTail, ArchetypeListT, EntityT> CanApplySystem<'a, SystemT, HCons<IndicesHead, IndicesTail>> for super::Archetype<ArchetypeListT, EntityT>
+impl<HeadT> ToIter for HCons<HeadT, HNil>
 where
-    ArchetypeListT: ToComponentList,
-    EntityT: From<usize>,
-    ArchetypeListT: ToComponentList + ToMut<'a>,
-    <ArchetypeListT as ToComponentList>::Output: ToMut<'a>,
-    <<ArchetypeListT as ToComponentList>::Output as ToMut<'a>>::Output: Sculptor<<<<SystemT as super::System>::Components as ToComponentList>::Output as ToMut<'a>>::Output, HCons<IndicesHead, IndicesTail>>,
-    SystemT: super::System,
-    <SystemT as super::System>::Components: ToMut<'a> + ToComponentList,
-    <<SystemT as super::System>::Components as ToComponentList>::Output: ToMut<'a>,
-    <<<SystemT as super::System>::Components as ToComponentList>::Output as ToMut<'a>>::Output: IntoParIter<Item = <<SystemT as super::System>::Components as ToMut<'a>>::Output>,
+    HeadT: IntoIterator,
+    <HeadT as IntoIterator>::Item: Send,
 {
-    fn apply_system(&'a mut self) {
-        let (resolved_components, _) : (<<<SystemT as super::System>::Components as ToComponentList>::Output as ToMut<'a>>::Output, _) = self.components.to_mut().sculpt();
-        resolved_components.get_parallel_mut().for_each(SystemT::update_instance);
+    type Item = HList![<HeadT as IntoIterator>::Item];
+    fn to_iter(self) -> impl Iterator<Item = Self::Item> {
+        core::iter::repeat(HNil)
+            .zip(self.head.into_iter())
+            .map(|(hnil, x)| hnil.prepend(x))
+    }
+}
+
+impl<HeadT, TailT: ToIter> ToIter for HCons<HeadT, TailT>
+where
+    HeadT: IntoIterator,
+    <HeadT as IntoIterator>::Item: Send,
+{
+    type Item = HList![<HeadT as IntoIterator>::Item, ...<TailT as ToIter>::Item];
+    fn to_iter(self) -> impl Iterator<Item = Self::Item> {
+        self.tail
+            .to_iter()
+            .zip(self.head.into_iter())
+            .map(|(tail, head)| tail.prepend(head))
     }
 }

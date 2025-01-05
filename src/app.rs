@@ -1,18 +1,22 @@
+use crate::app::utils::{get_debug_utils_callback, get_required_instance_extensions, get_required_layers, is_required_layer_support_available};
+use crate::ecs::{Archetype, System};
+use error::AppError;
+use frunk_core::traits::ToMut;
+use log::{debug, error, info, warn};
 use std::cmp::{max, min};
 use std::sync::Arc;
-use log::{error, debug, info};
 use thiserror::Error;
-use vulkano::{LoadingError, Validated, VulkanError, VulkanLibrary};
-use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFamilyProperties, QueueFlags};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
+use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFamilyProperties, QueueFlags};
 use vulkano::format::Format;
-use vulkano::image::{Image, ImageAspects, ImageSubresourceRange, ImageUsage};
 use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
-use vulkano::swapchain::{ColorSpace, Swapchain, SwapchainCreateInfo};
-use vulkano::instance::{Instance, InstanceCreateInfo};
+use vulkano::image::{Image, ImageAspects, ImageSubresourceRange, ImageUsage};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo};
-use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo};
+use vulkano::instance::{Instance, InstanceCreateInfo};
+use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass};
 use vulkano::swapchain::Surface;
+use vulkano::swapchain::{ColorSpace, Swapchain, SwapchainCreateInfo};
+use vulkano::{LoadingError, Validated, VulkanError, VulkanLibrary};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::error::EventLoopError;
@@ -20,51 +24,29 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::raw_window_handle::HandleError;
 use winit::window::{Window, WindowId};
-use crate::app::utils::{get_debug_utils_callback, get_required_device_extensions, get_required_device_features, get_required_instance_extensions, get_required_layers, is_required_device_support_available, is_required_layer_support_available};
+use capabilities::Capabilities;
+use config::Config;
+use settings::Settings;
 
 mod utils;
 mod shaders;
-
-#[derive(Error, Debug)]
-pub enum AppError {
-    #[error("unable to find required layers")]
-    VulkanMissingLayers,
-    #[error("unable to find a suitable device")]
-    VulkanNoSuitableDevice,
-    #[error("window event loop error! {0}")]
-    WindowEventError(#[from] EventLoopError),
-    #[error("failed to acquire raw window handle! {0}")]
-    HandleError(#[from] HandleError),
-    #[error("failed to load Vulkan! {0}")]
-    LoadingError(#[from] LoadingError),
-    #[error("vulkan error! {0}")]
-    ValidatedVulkanError(#[from] Validated<VulkanError>),
-    #[error("vulkan error! {0}")]
-    VulkanError(#[from] VulkanError)
-}
-
-// Config
-// TODO make this constructible using a builder
-pub struct AppConfig {
-    app_name: String
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        AppConfig {
-            app_name: String::from("Icarus Engine")
-        }
-    }
-}
+mod config;
+mod settings;
+mod error;
+mod resources;
+mod capabilities;
+mod game;
 
 // App manager produces instances
-pub struct AppManager {
+pub struct AppManager<DrawableT: Drawable> {
     event_loop: EventLoop<()>,
     vulkan_instance: Arc<Instance>,
+    app_settings: Settings,
+    drawable: Game,
 }
 
-impl AppManager {
-    pub fn from_config(app_config: AppConfig) -> Result<AppManager, AppError> {
+impl <DrawableT: Drawable> AppManager<DrawableT> {
+    pub fn from_config(app_config: Config, drawable: DrawableT) -> Result<Self, AppError> {
         let event_loop = EventLoop::new()?;
 
         let vk_lib = VulkanLibrary::new()?;
@@ -94,16 +76,20 @@ impl AppManager {
             ..InstanceCreateInfo::application_from_cargo_toml()
         })?;
 
-        Ok(AppManager {
+        Ok(Self {
             event_loop,
-            vulkan_instance
+            vulkan_instance,
+            app_settings,
+            drawable
         })
     }
 
     pub fn run(self) -> Result<(), AppError> {
         let mut handler = AppHandler {
             resources: None,
-            vulkan_instance: self.vulkan_instance
+            vulkan_instance: self.vulkan_instance,
+            drawable: self.drawable,
+            transient_resources: None
         };
 
         self.event_loop.run_app(&mut handler)?;
@@ -112,67 +98,49 @@ impl AppManager {
     }
 }
 
-struct AppCapabilities {
-    // TODO populate
-    score: u32
-}
-
-impl AppCapabilities {
-    fn required_features(&self) -> DeviceFeatures {
-        let all_features = get_required_device_features();
-        all_features
-    }
-
-    fn required_extensions(&self) -> DeviceExtensions {
-        let all_exts = get_required_device_extensions();
-        all_exts
-    }
-    
-    fn for_device_on_surface(physical_device: &Arc<PhysicalDevice>, surface: &Arc<Surface>) -> Option<Self> {
-        let mut score = 0;
-
-        score += match physical_device.clone().properties().device_type {
-            PhysicalDeviceType::DiscreteGpu => 5,
-            PhysicalDeviceType::IntegratedGpu => 4,
-            PhysicalDeviceType::VirtualGpu => 3,
-            PhysicalDeviceType::Other => 2,
-            PhysicalDeviceType::Cpu => 1,
-            _ => { return None; }
-        };
-
-        let _caps = physical_device.surface_capabilities(&surface, Default::default()).ok()?;
-
-        if physical_device.surface_formats(surface, Default::default()).ok()?.len() == 0 {
-            return None;
-        }
-
-        is_required_device_support_available(physical_device).then_some(
-            AppCapabilities {
-                score
-            })
-    }
-
-    fn score(&self) -> u32 { self.score }
-}
-
-struct AppResources {
+pub struct AppResources {
     window: Arc<Window>,
     vulkan_surface: Arc<Surface>,
-    capabilities: AppCapabilities,
+    capabilities: Capabilities,
     device: Arc<Device>,
     graphics_queue: Arc<Queue>,
     present_queue: Arc<Queue>, // Graphics Q and Present Q may be the same
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
+    image_views: Vec<Arc<ImageView>>,
+}
+
+pub struct TransientResources {
     frame_buffers: Vec<Arc<Framebuffer>>,
 }
 
-struct AppHandler {
-    vulkan_instance: Arc<Instance>,
-    resources: Option<AppResources>,
+impl TransientResources {
+    fn from_render_pass(app_resources: &AppResources, render_pass: Arc<RenderPass>) -> Result<Self, AppError> {
+        let frame_buffers = app_resources.image_views.iter().map(|view| {
+            Framebuffer::new(
+                render_pass.clone(),
+                FramebufferCreateInfo {
+                    
+                    ..FramebufferCreateInfo::default()
+                }
+            )
+        }).collect()?;
+
+        Ok(Self {
+            frame_buffers
+        })
+    }
 }
 
-impl ApplicationHandler for AppHandler {
+struct AppHandler<DrawableT: Drawable> {
+    vulkan_instance: Arc<Instance>,
+    resources: Option<AppResources>,
+    transient_resources: Option<TransientResources>,
+    drawable: DrawableT,
+    app_settings: Settings
+}
+
+impl <DrawableT: Drawable> ApplicationHandler for AppHandler<DrawableT> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window_attributes = Window::default_attributes()
             .with_title("TODO Replace with title")
@@ -209,7 +177,7 @@ impl ApplicationHandler for AppHandler {
 
             let best_device = all_devices
                 .filter_map(|physical_device|
-                    AppCapabilities::for_device_on_surface(&physical_device, &vulkan_surface)
+                    Capabilities::for_device_on_surface(&physical_device, &vulkan_surface)
                         .map(|app_capabilities| (physical_device, app_capabilities)))
                 .max_by_key(|(_physical_device, d)| d.score());
 
@@ -303,7 +271,6 @@ impl ApplicationHandler for AppHandler {
         let graphics_queue = queues.next().unwrap();
         let present_queue = queues.next().unwrap_or_else(|| graphics_queue.clone());
 
-        // TODO Create Swapchain
         let surface_capabilities =
             match device.physical_device().surface_capabilities(&vulkan_surface, Default::default()) {
                 Ok(caps) => caps,
@@ -343,7 +310,7 @@ impl ApplicationHandler for AppHandler {
                 SwapchainCreateInfo {
                     min_image_count: no_images,
                     image_format: image_format.0,
-                    image_extent: window.inner_size().into(),
+                    image_extent: self.app,
                     image_usage: ImageUsage::COLOR_ATTACHMENT,
                     composite_alpha,
                     ..SwapchainCreateInfo::default()
@@ -372,21 +339,13 @@ impl ApplicationHandler for AppHandler {
                     .. ImageViewCreateInfo::from_image(&image)
                 };
 
-                let image_view = ImageView::new(image, create_info)?;
-                
-                Framebuffer::new(
-                    todo!(),
-                    FramebufferCreateInfo {
-                        attachments: vec![image_view],
-                        ..FramebufferCreateInfo::default()
-                    }
-                )
+                ImageView::new(image, create_info)
             }).collect::<Result<Vec<_>, _>>();
             
             match fb_result {
                 Ok(fb) => fb,
                 Err(e) => {
-                    error!("Failed to create framebuffer! {e}");
+                    error!("Failed to create image views! {e}");
                     event_loop.exit();
                     return;
                 }
@@ -404,7 +363,7 @@ impl ApplicationHandler for AppHandler {
             present_queue,
             swapchain,
             images,
-            frame_buffers
+            image_views: frame_buffers
         })
     }
 
@@ -425,12 +384,16 @@ impl ApplicationHandler for AppHandler {
         }
     }
 
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(resources) = &mut self.resources {
+            self.transient_resources = self.drawable.draw(resources, self.transient_resources.take());
+        } else {
+            warn!("Application resources not available, but draw requested!");
+        }
+    }
+
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
         self.resources = None;
         debug!("App resources nuked!");
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        todo!("rendering will happen here")
     }
 }

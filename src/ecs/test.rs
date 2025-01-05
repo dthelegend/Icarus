@@ -1,9 +1,8 @@
-use crate::Archetype;
-use crate::ecs::{Archetype, System};
-use frunk::{Generic, hlist};
-use frunk_core::HList;
+use crate::ecs::{ArchetypeStorage, System};
+use frunk::{hlist, Generic};
 use frunk_core::traits::ToMut;
-use nalgebra::{Quaternion, SVector, vector};
+use frunk_core::HList;
+use nalgebra::{vector, Quaternion, SVector};
 use std::ops::{Add, AddAssign};
 
 #[derive(Copy, Clone, Default, Generic, Debug)]
@@ -92,7 +91,7 @@ fn test_ecs() {
 
     const COMPONENT_SIZE_UNIT: usize = 10;
 
-    let mut unit_arch: Archetype![Unit] = Archetype {
+    let mut unit_arch: ArchetypeT![Unit] = ArchetypeStorage {
         entity_list: vec![0, 1, 2, 3]
             .into_iter()
             .map(|x| (x as usize).into())
@@ -106,7 +105,7 @@ fn test_ecs() {
 
     const COMPONENT_SIZE_TILE: usize = 10;
 
-    let mut tile_arch: Archetype![Tile] = Archetype {
+    let mut tile_arch: ArchetypeT![Tile] = ArchetypeStorage {
         entity_list: vec![0, 1, 2, 3]
             .into_iter()
             .map(|x| (x as usize).into())

@@ -33,8 +33,9 @@ impl IcarusShader {
         unsafe { ShaderModule::new(logical_device, ShaderModuleCreateInfo::new(SHADER_MODULE_BIN)) }.map(|shader_module| IcarusShader { shader_module} )
     }
 
-    pub fn graphic_pipeline(&self) {
+    pub fn graphics_pipeline(&self) {
         // self.shader_module.entry_point("main")?.module().
         todo!()
     }
 }
+
