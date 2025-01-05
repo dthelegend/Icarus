@@ -1,7 +1,6 @@
 use crate::app::settings::Settings;
 
-// Config
-// TODO make this constructible using a builder
+/// App config is designed to be used to construct the AppManager
 pub struct Config {
     pub app_name: String,
     pub settings: Settings

@@ -1,12 +1,14 @@
+use std::cmp::{max, min};
 use vulkano::device::{DeviceExtensions, DeviceFeatures};
 use std::sync::Arc;
 use thiserror::Error;
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
-use vulkano::swapchain::Surface;
+use vulkano::swapchain::{ColorSpace, CompositeAlpha, Surface};
 use vulkano::{Validated, VulkanError};
+use vulkano::format::Format;
 
 #[derive(Error, Debug)]
-enum CapabilityError {
+pub enum CapabilityError {
     #[error("vulkan error! {0}")]
     VulkanError(#[from] Validated<VulkanError>),
     #[error("GPU is unsuitable")]
@@ -18,7 +20,10 @@ enum CapabilityError {
 pub struct Capabilities {
     device_features: DeviceFeatures,
     device_extensions: DeviceExtensions,
-    score: u32
+    score: u32,
+    swapchain_images: u32,
+    composite_alpha: CompositeAlpha,
+    image_format: (Format, ColorSpace),
 }
 
 const REQUIRED_DEVICE_EXTENSIONS : DeviceExtensions = DeviceExtensions {
@@ -52,10 +57,14 @@ impl Capabilities {
             _ => 0
         };
 
-        // let caps = physical_device.surface_capabilities(&surface, Default::default())?;
+        let caps = physical_device.surface_capabilities(&surface, Default::default())?;
+
+        let swapchain_images =  min(max(caps.min_image_count, 3), caps.max_image_count.unwrap_or(u32::MAX));
+        let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
+        let image_format = *physical_device.surface_formats(surface, Default::default())?.first().ok_or(CapabilityError::Unsuitable)?;
+        
         if
-            physical_device.surface_formats(surface, Default::default())?.len() == 0
-            || !physical_device.supported_features().contains(&REQUIRED_DEVICE_FEATURES)
+            !physical_device.supported_features().contains(&REQUIRED_DEVICE_FEATURES)
             || !physical_device.supported_extensions().contains(&OPTIONAL_DEVICE_EXTENSIONS)
         {
             Err(CapabilityError::Unsuitable)
@@ -63,6 +72,9 @@ impl Capabilities {
             Ok(Capabilities {
                 device_features: *physical_device.supported_features().intersection(&OPTIONAL_DEVICE_FEATURES),
                 device_extensions: *physical_device.supported_extensions().intersection(&OPTIONAL_DEVICE_EXTENSIONS),
+                swapchain_images,
+                composite_alpha,
+                image_format,
                 score,
             })
         }
@@ -72,4 +84,16 @@ impl Capabilities {
     
     pub fn required_features(&self) -> &DeviceFeatures { &self.device_features }
     pub fn required_extensions(&self) -> &DeviceExtensions { &self.device_extensions }
+
+    pub fn swapchain_images(&self) -> u32 {
+        self.swapchain_images
+    }
+
+    pub fn composite_alpha(&self) -> &CompositeAlpha {
+        &self.composite_alpha
+    }
+
+    pub fn image_format(&self) -> &(Format, ColorSpace) {
+        &self.image_format
+    }
 }

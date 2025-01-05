@@ -6,26 +6,19 @@ use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType,
 use vulkano::instance::InstanceExtensions;
 use vulkano::{VulkanError, VulkanLibrary};
 
-const INSTANCE_EXTENSIONS: InstanceExtensions = InstanceExtensions {
+pub const REQUIRED_INSTANCE_EXTENSIONS: InstanceExtensions = InstanceExtensions {
     khr_surface: true,
     ext_debug_utils: cfg!(debug_assertions),
     ..InstanceExtensions::empty()
 };
 
-pub const fn get_required_instance_extensions() -> InstanceExtensions {
-    INSTANCE_EXTENSIONS
-}
-
-#[cfg(not(debug_assertions))]
-const REQUIRED_LAYERS: [&str; 0] = [
-];
-#[cfg(debug_assertions)]
-const REQUIRED_LAYERS: [&str; 1] = [
-    "VK_LAYER_KHRONOS_validation"
+const REQUIRED_LAYERS: &[&str] = &[
+    #[cfg(debug_assertions)]
+    "VK_LAYER_KHRONOS_validation",
 ];
 
 pub fn get_required_layers() -> Vec<String> {
-    REQUIRED_LAYERS.into_iter().map(String::from).collect()
+    REQUIRED_LAYERS.into_iter().map(|&x| String::from(x)).collect()
 }
 
 
@@ -65,7 +58,7 @@ pub fn is_required_layer_support_available(vk_lib: &Arc<VulkanLibrary>) -> Resul
 
     debug!("Available Layers:\n - {0}", layer_property_list.iter().map(|x| x.name()).collect::<Vec<_>>().join("\n - "));
 
-    Ok(REQUIRED_LAYERS.into_iter().all(|x| {
+    Ok(REQUIRED_LAYERS.into_iter().all(|&x| {
         layer_property_list.iter().any(|y| y.name() == x)
     }))
 }
