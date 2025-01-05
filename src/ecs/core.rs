@@ -5,7 +5,7 @@ pub mod archetypes {
     #[derive(Archetype)]
     pub struct Drawable {
         transform: Transform,
-        model_data: ModelData
+        model_data: ModelData,
     }
 }
 
@@ -26,7 +26,7 @@ pub mod components {
 
     #[derive(Clone)]
     pub struct ModelData {
-        model_data: Subbuffer<[[f32;3]]>
+        model_data: Subbuffer<[[f32; 3]]>,
     }
 
     #[derive(thiserror::Error, Debug)]
@@ -34,7 +34,7 @@ pub mod components {
         #[error("failed to load model!")]
         ModelError(ModelError),
         #[error("vulkan error! {0}")]
-        AllocationError(#[from] Validated<AllocateBufferError>)
+        AllocationError(#[from] Validated<AllocateBufferError>),
     }
 
     impl ModelData {
@@ -42,7 +42,7 @@ pub mod components {
             let model_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("models").join("teapot.ply");
             Self::from_path(memory_allocator, model_path)
         }
-        
+
         pub fn from_path<P: AsRef<Path>>(memory_allocator: Arc<dyn MemoryAllocator>, path: P) -> Result<ModelData, ModelDataError> {
             let model = Model3D::load(path).map_err(ModelDataError::ModelError)?;
 
@@ -64,7 +64,7 @@ pub mod components {
                         | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                     ..Default::default()
                 },
-                vertices
+                vertices,
             ).map(|model_data| ModelData { model_data }).map_err(From::from)
         }
     }

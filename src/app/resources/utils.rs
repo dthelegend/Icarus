@@ -29,7 +29,7 @@ pub fn get_debug_utils_callback() -> Arc<DebugUtilsMessengerCallback> {
 fn vulkan_debug_utils_callback(
     message_severity: DebugUtilsMessageSeverity,
     message_type: DebugUtilsMessageType,
-    data: DebugUtilsMessengerCallbackData<'_>
+    data: DebugUtilsMessengerCallbackData<'_>,
 ) {
     let log_level = match message_severity {
         DebugUtilsMessageSeverity::VERBOSE => Level::Trace,

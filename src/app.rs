@@ -5,3 +5,6 @@ mod core;
 mod capabilities;
 mod game;
 mod resources;
+
+pub use config::*;
+pub use core::*;

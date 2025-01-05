@@ -1,7 +1,7 @@
 #![no_std]
 
-use spirv_std::spirv;
 use spirv_std::glam::{vec4, Vec4};
+use spirv_std::spirv;
 
 #[spirv(fragment)]
 pub fn main_fs(output: &mut Vec4) {

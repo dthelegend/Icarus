@@ -29,8 +29,8 @@ struct IcarusShader {
 }
 
 impl IcarusShader {
-    pub fn load(logical_device: Arc<Device>, ) -> Result<IcarusShader, Validated<VulkanError>> {
-        unsafe { ShaderModule::new(logical_device, ShaderModuleCreateInfo::new(SHADER_MODULE_BIN)) }.map(|shader_module| IcarusShader { shader_module} )
+    pub fn load(logical_device: Arc<Device>) -> Result<IcarusShader, Validated<VulkanError>> {
+        unsafe { ShaderModule::new(logical_device, ShaderModuleCreateInfo::new(SHADER_MODULE_BIN)) }.map(|shader_module| IcarusShader { shader_module })
     }
 
     pub fn graphics_pipeline(&self) {

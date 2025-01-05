@@ -30,16 +30,16 @@ impl Entity {
 pub struct ArchetypeStorage<ArchetypeT>
 where
     ArchetypeT: Generic,
-    <ArchetypeT as Generic>::Repr: ComponentList
+    <ArchetypeT as Generic>::Repr: ComponentList,
 {
     entity_list: ComponentStorage<Entity>,
     components: <<ArchetypeT as Generic>::Repr as ComponentList>::Storage,
 }
 
-impl <ArchetypeT> ArchetypeStorage<ArchetypeT>
+impl<ArchetypeT> ArchetypeStorage<ArchetypeT>
 where
     ArchetypeT: Generic,
-    <ArchetypeT as Generic>::Repr: ComponentList
+    <ArchetypeT as Generic>::Repr: ComponentList,
 {
     pub fn new() -> Self {
         Self {
@@ -49,25 +49,25 @@ where
     }
 }
 
-impl <ArchetypeT: ComponentList> ArchetypeStorage<ArchetypeT>
+impl<ArchetypeT: ComponentList> ArchetypeStorage<ArchetypeT>
 where
     ArchetypeT: Generic,
-    <ArchetypeT as Generic>::Repr: ComponentList
+    <ArchetypeT as Generic>::Repr: ComponentList,
 {
     pub fn push(&mut self, instance: ArchetypeT) -> Entity
     {
         let entity = Entity::new(self.entity_list.len());
         self.entity_list.push(entity);
         <ArchetypeT as Generic>::Repr::push_to_storage(&mut self.components, instance.into());
-        
+
         entity
     }
 }
 
-impl <ArchetypeT> ArchetypeStorage<ArchetypeT>
+impl<ArchetypeT> ArchetypeStorage<ArchetypeT>
 where
     ArchetypeT: Generic,
-    <ArchetypeT as Generic>::Repr: ComponentList
+    <ArchetypeT as Generic>::Repr: ComponentList,
 {
     pub fn get_components<'a, SubArchetype, Indices>(&'a mut self) -> <<<SubArchetype as Generic>::Repr as ComponentList>::Storage as ToMut<'a>>::Output
     where
@@ -75,9 +75,9 @@ where
         <SubArchetype as Generic>::Repr: ComponentList,
         <<ArchetypeT as Generic>::Repr as ComponentList>::Storage: ToMut<'a>,
         <<SubArchetype as Generic>::Repr as ComponentList>::Storage: ToMut<'a>,
-        <<<ArchetypeT as Generic>::Repr as ComponentList>::Storage as ToMut<'a>>::Output: Sculptor<<<<SubArchetype as Generic>::Repr as ComponentList>::Storage as ToMut<'a>>::Output, Indices>
+        <<<ArchetypeT as Generic>::Repr as ComponentList>::Storage as ToMut<'a>>::Output: Sculptor<<<<SubArchetype as Generic>::Repr as ComponentList>::Storage as ToMut<'a>>::Output, Indices>,
     {
-        let (x, _ ) = self.components.to_mut().sculpt();
+        let (x, _) = self.components.to_mut().sculpt();
         x
     }
 }

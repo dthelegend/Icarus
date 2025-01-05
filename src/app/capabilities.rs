@@ -1,11 +1,11 @@
 use std::cmp::{max, min};
-use vulkano::device::{DeviceExtensions, DeviceFeatures};
 use std::sync::Arc;
 use thiserror::Error;
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
+use vulkano::device::{DeviceExtensions, DeviceFeatures};
+use vulkano::format::Format;
 use vulkano::swapchain::{ColorSpace, CompositeAlpha, Surface};
 use vulkano::{Validated, VulkanError};
-use vulkano::format::Format;
 
 #[derive(Error, Debug)]
 pub enum CapabilityError {
@@ -26,12 +26,12 @@ pub struct Capabilities {
     image_format: (Format, ColorSpace),
 }
 
-const REQUIRED_DEVICE_EXTENSIONS : DeviceExtensions = DeviceExtensions {
+const REQUIRED_DEVICE_EXTENSIONS: DeviceExtensions = DeviceExtensions {
     khr_swapchain: true,
     ..DeviceExtensions::empty()
 };
 
-const REQUIRED_DEVICE_FEATURES : DeviceFeatures = DeviceFeatures {
+const REQUIRED_DEVICE_FEATURES: DeviceFeatures = DeviceFeatures {
     ..DeviceFeatures::empty()
 };
 
@@ -44,7 +44,6 @@ const OPTIONAL_DEVICE_FEATURES: DeviceFeatures = DeviceFeatures {
 };
 
 impl Capabilities {
-    
     pub fn for_device_on_surface(physical_device: &Arc<PhysicalDevice>, surface: &Arc<Surface>) -> Result<Self, CapabilityError> {
         let mut score = 0;
 
@@ -59,19 +58,19 @@ impl Capabilities {
 
         let caps = physical_device.surface_capabilities(&surface, Default::default())?;
 
-        let swapchain_images =  min(max(caps.min_image_count, 3), caps.max_image_count.unwrap_or(u32::MAX));
+        let swapchain_images = min(max(caps.min_image_count, 3), caps.max_image_count.unwrap_or(u32::MAX));
         let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
         let image_format = *physical_device.surface_formats(surface, Default::default())?.first().ok_or(CapabilityError::Unsuitable)?;
-        
+
         if
-            !physical_device.supported_features().contains(&REQUIRED_DEVICE_FEATURES)
+        !physical_device.supported_features().contains(&REQUIRED_DEVICE_FEATURES)
             || !physical_device.supported_extensions().contains(&OPTIONAL_DEVICE_EXTENSIONS)
         {
             Err(CapabilityError::Unsuitable)
         } else {
             Ok(Capabilities {
-                device_features: *physical_device.supported_features().intersection(&OPTIONAL_DEVICE_FEATURES),
-                device_extensions: *physical_device.supported_extensions().intersection(&OPTIONAL_DEVICE_EXTENSIONS),
+                device_features: physical_device.supported_features().intersection(&OPTIONAL_DEVICE_FEATURES),
+                device_extensions: physical_device.supported_extensions().intersection(&OPTIONAL_DEVICE_EXTENSIONS),
                 swapchain_images,
                 composite_alpha,
                 image_format,
@@ -81,7 +80,7 @@ impl Capabilities {
     }
 
     pub fn score(&self) -> u32 { self.score }
-    
+
     pub fn required_features(&self) -> &DeviceFeatures { &self.device_features }
     pub fn required_extensions(&self) -> &DeviceExtensions { &self.device_extensions }
 
