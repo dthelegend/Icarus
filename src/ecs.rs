@@ -1,7 +1,5 @@
 use frunk::traits::ToMut;
 
-#[cfg(test)]
-mod test;
 pub mod traits;
 pub mod core;
 

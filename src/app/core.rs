@@ -3,7 +3,9 @@ use crate::app::resources::{ActiveRenderResources, RenderResources, ResourceErro
 use crate::app::settings::Settings;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use thiserror::Error;
+use vulkano::render_pass::RenderPass;
 use vulkano::Version;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -11,6 +13,8 @@ use winit::error::EventLoopError;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
+use crate::app::game::GameHandler;
+use crate::app::GameError;
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -18,8 +22,10 @@ pub enum AppError {
     WindowEventError(#[from] EventLoopError),
     #[error(transparent)]
     ResourceError(#[from] ResourceError),
-    #[error("Draw error")]
-    DrawError,
+    #[error("Game error! {0}")]
+    GameError(#[from] GameError),
+    #[error("Invariant violation! No active resources!")]
+    NoActiveResources
 }
 
 // App manager produces instances
@@ -44,11 +50,14 @@ impl AppManager {
         })
     }
 
-    pub fn run(self) -> Result<(), AppError> {
+    pub fn run_game<Game: GameHandler>(self, game: &mut Game) -> Result<(), AppError> {
+        game.on_start();
+        
         let mut handler = AppHandler {
             app_name: self.app_name,
             render_resources: self.render_resources,
             settings: self.settings,
+            game
         };
 
         self.event_loop.run_app(&mut handler)?;
@@ -58,27 +67,26 @@ impl AppManager {
 }
 
 
-struct AppHandler {
+struct AppHandler<'a, Game: GameHandler> {
     app_name: String,
     render_resources: RenderResources,
     settings: Settings,
+    game: &'a mut Game
 }
 
-impl AppHandler {
+impl <T: GameHandler> AppHandler<'_, T> {
+    
     fn draw(&mut self) -> Result<(), AppError> {
-        let active_resources = self.render_resources.active_resources.as_mut().ok_or(AppError::DrawError)?;
-
-        let tmp_transient_render_resources = active_resources.transient_render_resources.take().ok_or(AppError::DrawError)?;
-
-        // TODO Some drawing
-
-        active_resources.transient_render_resources = Some(tmp_transient_render_resources);
+        let active_resources = self.render_resources.active_resources.as_mut().ok_or(AppError::NoActiveResources)?;
+        
+        // Let there be fish in the sea of love
+        self.game.draw(active_resources)?;
 
         Ok(())
     }
 }
 
-impl ApplicationHandler for AppHandler {
+impl <T: GameHandler> ApplicationHandler for AppHandler<'_, T> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window_attributes = Window::default_attributes()
             .with_title(self.app_name.clone())
@@ -120,15 +128,16 @@ impl ApplicationHandler for AppHandler {
             }
             WindowEvent::RedrawRequested => {
                 if let Err(e) = self.draw() {
-                    error!("Failed to draw: {}", e);
+                    error!("Failed to draw on redraw request: {}", e);
                     event_loop.exit();
                 }
             }
             WindowEvent::Resized(_) => {
                 if let Some(active_resources) = &mut self.render_resources.active_resources {
+                    // invalidate active resources
                     active_resources.transient_render_resources = None;
                     if let Err(e) = self.draw() {
-                        error!("Failed to draw: {}", e);
+                        error!("Failed to draw after resize: {}", e);
                         event_loop.exit();
                     }
                 } else {
@@ -142,7 +151,7 @@ impl ApplicationHandler for AppHandler {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Err(e) = self.draw() {
-            error!("Failed to draw: {}", e);
+            error!("Failed to draw when waiting: {}", e);
             event_loop.exit();
         }
     }

@@ -4,7 +4,9 @@ mod settings;
 mod core;
 mod capabilities;
 mod game;
-mod resources;
+pub mod resources;
+mod render_pass;
 
 pub use config::*;
 pub use core::*;
+pub use game::*;

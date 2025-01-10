@@ -10,6 +10,7 @@ use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass};
 use vulkano::swapchain::{FromWindowError, Surface, Swapchain, SwapchainCreateInfo};
 use vulkano::{LoadingError, Validated, Version, VulkanError, VulkanLibrary};
+use vulkano::format::Format;
 use winit::event_loop::EventLoop;
 use winit::raw_window_handle::HandleError;
 use winit::window::Window;
@@ -39,24 +40,40 @@ pub enum ResourceError {
 
 /// Resources that may be destroyed an
 pub struct TransientRenderResources {
-    pub(crate) render_pass: Arc<RenderPass>,
+    render_pass: Arc<RenderPass>,
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
     frame_buffers: Vec<Arc<Framebuffer>>,
 }
 
 impl TransientRenderResources {
-    pub fn new(active_resources: &ActiveRenderResources, render_size: [u32; 2], render_pass: Arc<RenderPass>) -> Result<Self, ResourceError> {
+    pub fn new(active_resources: &ActiveRenderResources) -> Result<Self, ResourceError> {
         let (swapchain, images) = Swapchain::new(
             active_resources.device.clone(),
             active_resources.vulkan_surface.clone(),
             SwapchainCreateInfo {
                 min_image_count: active_resources.capabilities.swapchain_images(),
                 image_format: active_resources.capabilities.image_format().0,
-                image_extent: render_size,
+                image_extent: active_resources.window.inner_size().into(),
                 image_usage: ImageUsage::COLOR_ATTACHMENT,
                 composite_alpha: *active_resources.capabilities.composite_alpha(),
                 ..SwapchainCreateInfo::default()
+            },
+        )?;
+
+        let render_pass = vulkano::single_pass_renderpass!(
+            active_resources.device.clone(),
+            attachments: {
+                color: {
+                    format: swapchain.image_format(),
+                    samples: 1,
+                    load_op: Clear,
+                    store_op: Store,
+                },
+            },
+            pass: {
+                color: [color],
+                depth_stencil: {},
             },
         )?;
 
