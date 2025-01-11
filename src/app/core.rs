@@ -5,7 +5,6 @@ use crate::app::settings::Settings;
 use crate::app::GameError;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
-use std::thread::JoinHandle;
 use thiserror::Error;
 use vulkano::render_pass::RenderPass;
 use vulkano::Version;
@@ -23,12 +22,9 @@ pub enum AppError {
     #[error(transparent)]
     ResourceError(#[from] ResourceError),
     #[error("Game error! {0}")]
-    GameError(#[from] GameError),
-    #[error("Invariant violation! No active resources!")]
-    NoActiveResources
+    GameError(#[from] GameError)
 }
 
-// App manager produces instances
 pub struct AppManager {
     app_name: String,
     event_loop: EventLoop<()>,
@@ -128,7 +124,6 @@ impl <T: GameHandler> ApplicationHandler for AppHandler<'_, T> {
                 if let Err(e) = &mut self.render_resources.recreate_swapchain() {
                     error!("Failed to recreate swapchain! {e}");
                     event_loop.exit();
-                    return;
                 }
             }
             _ => (),

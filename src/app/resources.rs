@@ -1,6 +1,6 @@
 use crate::app::capabilities::{Capabilities, CapabilityError};
 use crate::app::resources::utils::{get_debug_utils_callback, get_required_layers, is_required_layer_support_available, REQUIRED_INSTANCE_EXTENSIONS};
-use log::warn;
+use log::{debug, trace, warn};
 use std::sync::Arc;
 use thiserror::Error;
 use vulkano::buffer::Subbuffer;
@@ -15,8 +15,10 @@ use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::pipeline::graphics::vertex_input::VertexBuffersCollection;
 use vulkano::pipeline::GraphicsPipeline;
 use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass};
-use vulkano::swapchain::{FromWindowError, Surface, Swapchain, SwapchainCreateInfo};
-use vulkano::{LoadingError, Validated, ValidationError, Version, VulkanError, VulkanLibrary};
+use vulkano::swapchain::{AcquireNextImageInfo, AcquiredImage, FromWindowError, Surface, Swapchain, SwapchainCreateInfo};
+use vulkano::{sync, LoadingError, Validated, ValidationError, Version, VulkanError, VulkanLibrary};
+use vulkano::sync::future::FenceSignalFuture;
+use vulkano::sync::GpuFuture;
 use winit::event_loop::EventLoop;
 use winit::raw_window_handle::HandleError;
 use winit::window::Window;
@@ -42,7 +44,49 @@ pub enum ResourceError {
     #[error("failed to create surface from window! {0}")]
     SurfaceCreationError(#[from] FromWindowError),
     #[error("failed to build graphics pipeline!")]
-    GraphicsPipelineError(#[from] Box<ValidationError>)
+    GraphicsPipelineError(#[from] Box<ValidationError>),
+    #[error("attempt to draw without required resources")]
+    MissingRequiredResources,
+}
+
+/// Wow, there's a lot of boilerplate
+struct DrawResources {
+    fences: Vec<Option<Arc<FenceSignalFuture<_>>>>
+}
+
+impl DrawResources {
+    pub fn new(device_resources: &mut DeviceResources) -> Result<Self, ResourceError> {
+        let mut swapchain_resources = device_resources.swapchain_resources
+            .as_mut()
+            .ok_or(ResourceError::MissingRequiredResources)?;
+        
+        let image_i = unsafe {
+            swapchain_resources.swapchain.acquire_next_image(&AcquireNextImageInfo {
+                timeout: None,
+                ..AcquireNextImageInfo::default()
+            })
+        }?;
+
+        if image_i.is_suboptimal {
+            // Must recreate
+            trace!("Swapchain is suboptimal and must be recreated");
+            *swapchain_resources = swapchain_resources.recreate_identical()?;
+        }
+
+        let execution = sync::now(swapchain_resources.device().clone())
+            .join(image_i)
+            .then_execute(swapchain_resources.swapchain.clone(), command_buffers[image_i as usize].clone())
+            .unwrap()
+            .then_swapchain_present(
+                queue.clone(),
+                SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i),
+            )
+            .then_signal_fence_and_flush();
+
+        Self {
+            fences: vec![None; frames_in_flight]
+        }
+    }
 }
 
 /// Resources that may be destroyed any time
@@ -51,6 +95,8 @@ struct SwapchainResources {
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
     frame_buffers: Vec<Arc<Framebuffer>>,
+
+    draw_resources: Option<DrawResources>
 }
 
 impl SwapchainResources {
@@ -114,22 +160,32 @@ impl SwapchainResources {
             swapchain,
             images,
             frame_buffers,
+            draw_resources: None
         })
     }
-
-    pub fn recreate(self, new_size: [u32; 2]) -> Result<Self, ResourceError> {
+    
+    pub fn recreate_with_new_size(&self, new_size: [u32; 2]) -> Result<Self, ResourceError> {
         let swapchain_recreate_info = SwapchainCreateInfo {
             image_extent: new_size,
             ..self.swapchain.create_info()
         };
         
+        self.recreate(swapchain_recreate_info)
+    }
+    
+    pub fn recreate_identical(&self) -> Result<Self, ResourceError> {
+        let create_info = self.swapchain.create_info();
+        self.recreate(create_info)
+    }
+
+    fn recreate(&self, swapchain_recreate_info: SwapchainCreateInfo) -> Result<Self, ResourceError> {
         let (swapchain, images) = self.swapchain.recreate(swapchain_recreate_info)?;
 
         let render_pass = vulkano::single_pass_renderpass!(
-            swapchain.device().clone(),
+            self.swapchain.device().clone(),
             attachments: {
                 color: {
-                    format: swapchain.image_format(),
+                    format: self.swapchain.image_format(),
                     samples: 1,
                     load_op: Clear,
                     store_op: Store,
@@ -158,7 +214,7 @@ impl SwapchainResources {
                 let view = ImageView::new(image, create_info)?;
 
                 Framebuffer::new(
-                    render_pass.clone(),
+                    self.render_pass.clone(),
                     FramebufferCreateInfo {
                         attachments: vec![view],
                         ..FramebufferCreateInfo::default()
@@ -166,11 +222,12 @@ impl SwapchainResources {
                 )
             }).collect::<Result<_, _>>()?;
 
-        Ok(SwapchainResources {
+        Ok(Self {
             render_pass,
             swapchain,
             images,
             frame_buffers,
+            draw_resources: None,
         })
     }
 }
@@ -339,27 +396,78 @@ impl RenderResources {
     pub fn recreate_swapchain(&mut self) -> Result<&mut Self, ResourceError> {
         if let Some(device_resources) = &mut self.device_resources {
             let swapchain_resources = match device_resources.swapchain_resources.take() {
-                Some(swapchain_resources) => swapchain_resources.recreate(device_resources.window.inner_size().into())?,
+                Some(mut swapchain_resources) => {
+                    swapchain_resources.recreate_with_new_size(device_resources.window.inner_size().into())?
+                },
                 None => SwapchainResources::new(device_resources)?
             };
-            
+
             device_resources.swapchain_resources = Some(swapchain_resources);
         } else {
-            warn!("Recreating swapchain without device resources!");
+            warn!("Attempt to recreate swapchain without device resources!");
         }
-        
+
         Ok(self)
     }
 
     pub fn create_device_resources(&mut self,  window: Arc<Window>) -> Result<&mut Self, ResourceError> {
         self.device_resources = Some(DeviceResources::new(self, window)?);
-        
+
         Ok(self)
     }
-    
+
     pub fn destroy_device_resources(&mut self) -> &mut Self {
         self.device_resources = None;
 
         self
+    }
+
+    pub fn draw(&self, pipeline: Arc<GraphicsPipeline>, vertex_buffer: Vec<Subbuffer<[[f32;3]]>>) -> Result<(), ResourceError> {
+        let device_resources = self.device_resources
+            .as_ref()
+            .ok_or(ResourceError::MissingRequiredResources)?;
+
+        let swapchain_resources = device_resources.swapchain_resources
+            .as_ref()
+            .ok_or(ResourceError::MissingRequiredResources)?;
+
+
+
+        let cb = swapchain_resources.frame_buffers
+            .iter()
+            .map(|fb| -> Result<Arc<_>, ResourceError> {
+                let mut builder = AutoCommandBufferBuilder::primary(
+                    device_resources.command_buffer_allocator.clone(),
+                    device_resources.present_queue.queue_family_index(),
+                    CommandBufferUsage::MultipleSubmit,
+                )?;
+
+                builder
+                    .begin_render_pass(
+                        RenderPassBeginInfo {
+                            clear_values: vec![Some([0.1, 0.1, 0.1, 1.0].into())],
+                            ..RenderPassBeginInfo::framebuffer(fb.clone())
+                        },
+                        SubpassBeginInfo {
+                            contents: SubpassContents::Inline,
+                            ..Default::default()
+                        },
+                    )?
+                    .bind_pipeline_graphics(pipeline.clone())?
+                    .bind_vertex_buffers(0, vertex_buffer.clone())?;
+
+                unsafe {
+                    builder
+                        .draw(vertex_buffer.len() as u32, 1, 0, 0)
+                }?;
+
+                builder
+                    .end_render_pass(SubpassEndInfo::default())?;
+
+                Ok(builder.build()?)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(())
     }
 }
