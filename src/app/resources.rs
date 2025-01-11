@@ -9,8 +9,13 @@ use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType,
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass};
 use vulkano::swapchain::{FromWindowError, Surface, Swapchain, SwapchainCreateInfo};
-use vulkano::{LoadingError, Validated, Version, VulkanError, VulkanLibrary};
+use vulkano::{LoadingError, Validated, ValidationError, Version, VulkanError, VulkanLibrary};
+use vulkano::buffer::Subbuffer;
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
+use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::format::Format;
+use vulkano::pipeline::graphics::vertex_input::VertexBuffersCollection;
+use vulkano::pipeline::GraphicsPipeline;
 use winit::event_loop::EventLoop;
 use winit::raw_window_handle::HandleError;
 use winit::window::Window;
@@ -35,6 +40,8 @@ pub enum ResourceError {
     ValidatedVulkanError(#[from] Validated<VulkanError>),
     #[error("failed to create surface from window! {0}")]
     SurfaceCreationError(#[from] FromWindowError),
+    #[error("failed to build graphics pipeline!")]
+    GraphicsPipelineError(#[from] Box<ValidationError>)
 }
 
 
@@ -120,7 +127,8 @@ pub struct ActiveRenderResources {
     capabilities: Capabilities,
     device: Arc<Device>,
     graphics_queue: Arc<Queue>,
-    present_queue: Arc<Queue>, // Graphics Q and Present Q may be the same
+    present_queue: Arc<Queue>, // Graphics Q and Present Q may be the same,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
 
     // Ensures our transient resources cannot live longer than our static ones
     pub transient_render_resources: Option<TransientRenderResources>,
@@ -198,6 +206,13 @@ impl ActiveRenderResources {
         let graphics_queue = queues.next().unwrap();
         let present_queue = queues.next().unwrap_or_else(|| graphics_queue.clone());
 
+        let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
+            device.clone(),
+            StandardCommandBufferAllocatorCreateInfo {
+                ..StandardCommandBufferAllocatorCreateInfo::default()
+            }
+        ));
+
         Ok(ActiveRenderResources {
             window,
             vulkan_surface,
@@ -205,9 +220,52 @@ impl ActiveRenderResources {
             device,
             graphics_queue,
             present_queue,
+            command_buffer_allocator,
 
             transient_render_resources: None,
         })
+    }
+
+    pub fn draw(&mut self, pipeline: &Arc<GraphicsPipeline>, vertex_buffers: impl VertexBuffersCollection) -> Result<(), ResourceError> {
+        if let Some(transient_render_resources) = &self.transient_render_resources {
+            let command_buffers = transient_render_resources.frame_buffers
+                .iter()
+                .map(|frame_buffer| {
+                    let mut builder = AutoCommandBufferBuilder::primary(
+                        self.command_buffer_allocator.clone(),
+                        self.present_queue.queue_family_index(),
+                        CommandBufferUsage::MultipleSubmit,
+                    )?;
+
+                    builder
+                        .begin_render_pass(
+                            RenderPassBeginInfo {
+                                clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
+                                ..RenderPassBeginInfo::framebuffer(frame_buffer.clone())
+                            },
+                            SubpassBeginInfo {
+                                contents: SubpassContents::Inline,
+                                ..SubpassBeginInfo::default()
+                            },
+                        )?
+                        .bind_pipeline_graphics(pipeline.clone())?
+                        .bind_vertex_buffers(0, vertex_buffers.clone())?;
+
+                    unsafe {
+                        builder
+                            .draw(vertex_buffers.len() as u32, 1, 0, 0)
+                    }?;
+
+                    builder.end_render_pass(SubpassEndInfo::default())?;
+
+                    Ok(builder.build()?)
+                })
+                .collect::<Result<Vec<_>,_>>()?;
+
+            command_buffers.iter().map(|x| x.)
+        }
+
+        Ok(())
     }
 }
 

@@ -20,7 +20,7 @@ pub mod components {
 
     pub struct Transform {
         position: [f32; 3],
-        rotation: [f32; 3],
+        rotation: [f32; 4],
         scale: [f32; 3],
     }
 
