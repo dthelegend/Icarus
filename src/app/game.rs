@@ -1,6 +1,6 @@
-use thiserror::Error;
 use crate::app::resources;
-use crate::app::resources::ActiveRenderResources;
+use crate::app::resources::RenderResources;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum GameError {
@@ -10,5 +10,5 @@ pub enum GameError {
 
 pub trait GameHandler {
     fn on_start(&mut self);
-    fn draw(&mut self, resources: &mut ActiveRenderResources) -> Result<(), GameError>;
+    fn draw(&mut self, resources: &mut RenderResources) -> Result<(), GameError>;
 }

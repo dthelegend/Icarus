@@ -1,6 +1,8 @@
 use crate::app::config::Config;
-use crate::app::resources::{ActiveRenderResources, RenderResources, ResourceError, TransientRenderResources};
+use crate::app::game::GameHandler;
+use crate::app::resources::{RenderResources, ResourceError};
 use crate::app::settings::Settings;
+use crate::app::GameError;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -13,8 +15,6 @@ use winit::error::EventLoopError;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
-use crate::app::game::GameHandler;
-use crate::app::GameError;
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -77,10 +77,8 @@ struct AppHandler<'a, Game: GameHandler> {
 impl <T: GameHandler> AppHandler<'_, T> {
     
     fn draw(&mut self) -> Result<(), AppError> {
-        let active_resources = self.render_resources.active_resources.as_mut().ok_or(AppError::NoActiveResources)?;
-        
         // Let there be fish in the sea of love
-        self.game.draw(active_resources)?;
+        self.game.draw(&mut self.render_resources)?;
 
         Ok(())
     }
@@ -102,16 +100,10 @@ impl <T: GameHandler> ApplicationHandler for AppHandler<'_, T> {
 
         debug!("Created a new window!");
 
-        self.render_resources.active_resources = match ActiveRenderResources::new(&self.render_resources, window.clone()) {
-            Ok(active_resources) => {
-                debug!("Successfully created application resources!");
-                Some(active_resources)
-            }
-            Err(e) => {
-                error!("Failed to recreate Active Resources! {e}");
-                event_loop.exit();
-                return;
-            }
+        if let Err(e) = self.render_resources.create_device_resources(window.clone()) {
+            error!("Failed to recreate Active Resources! {e}");
+            event_loop.exit();
+            return;
         }
     }
 
@@ -133,16 +125,10 @@ impl <T: GameHandler> ApplicationHandler for AppHandler<'_, T> {
                 }
             }
             WindowEvent::Resized(_) => {
-                if let Some(active_resources) = &mut self.render_resources.active_resources {
-                    // invalidate active resources
-                    active_resources.transient_render_resources = None;
-                    if let Err(e) = self.draw() {
-                        error!("Failed to draw after resize: {}", e);
-                        event_loop.exit();
-                    }
-                } else {
-                    error!("Invariant violated: No active resources!");
+                if let Err(e) = &mut self.render_resources.recreate_swapchain() {
+                    error!("Failed to recreate swapchain! {e}");
                     event_loop.exit();
+                    return;
                 }
             }
             _ => (),
@@ -157,7 +143,7 @@ impl <T: GameHandler> ApplicationHandler for AppHandler<'_, T> {
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
-        self.render_resources.active_resources = None;
+        self.render_resources.destroy_device_resources();
         debug!("App resources nuked!");
     }
 }

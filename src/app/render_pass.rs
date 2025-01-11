@@ -3,7 +3,6 @@ use vulkano::device::Device;
 use vulkano::format::Format;
 use vulkano::render_pass::RenderPass;
 use vulkano::{Validated, VulkanError};
-use vulkano::command_buffer::AutoCommandBufferBuilder;
 
 struct AppRenderPass {
     render_pass: Arc<RenderPass>,

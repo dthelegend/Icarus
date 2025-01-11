@@ -1,21 +1,22 @@
 use crate::app::capabilities::{Capabilities, CapabilityError};
 use crate::app::resources::utils::{get_debug_utils_callback, get_required_layers, is_required_layer_support_available, REQUIRED_INSTANCE_EXTENSIONS};
+use log::warn;
 use std::sync::Arc;
 use thiserror::Error;
-use vulkano::device::{Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::buffer::Subbuffer;
+use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
+use vulkano::device::{Device, DeviceCreateInfo, DeviceOwned, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::format::Format;
 use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
 use vulkano::image::{Image, ImageAspects, ImageSubresourceRange, ImageUsage};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessengerCreateInfo};
 use vulkano::instance::{Instance, InstanceCreateInfo};
+use vulkano::pipeline::graphics::vertex_input::VertexBuffersCollection;
+use vulkano::pipeline::GraphicsPipeline;
 use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass};
 use vulkano::swapchain::{FromWindowError, Surface, Swapchain, SwapchainCreateInfo};
 use vulkano::{LoadingError, Validated, ValidationError, Version, VulkanError, VulkanLibrary};
-use vulkano::buffer::Subbuffer;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
-use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::format::Format;
-use vulkano::pipeline::graphics::vertex_input::VertexBuffersCollection;
-use vulkano::pipeline::GraphicsPipeline;
 use winit::event_loop::EventLoop;
 use winit::raw_window_handle::HandleError;
 use winit::window::Window;
@@ -44,17 +45,16 @@ pub enum ResourceError {
     GraphicsPipelineError(#[from] Box<ValidationError>)
 }
 
-
-/// Resources that may be destroyed an
-pub struct TransientRenderResources {
+/// Resources that may be destroyed any time
+struct SwapchainResources {
     render_pass: Arc<RenderPass>,
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
     frame_buffers: Vec<Arc<Framebuffer>>,
 }
 
-impl TransientRenderResources {
-    pub fn new(active_resources: &ActiveRenderResources) -> Result<Self, ResourceError> {
+impl SwapchainResources {
+    pub fn new(active_resources: &DeviceResources) -> Result<Self, ResourceError> {
         let (swapchain, images) = Swapchain::new(
             active_resources.device.clone(),
             active_resources.vulkan_surface.clone(),
@@ -109,7 +109,64 @@ impl TransientRenderResources {
                 )
             }).collect::<Result<_, _>>()?;
 
-        Ok(TransientRenderResources {
+        Ok(SwapchainResources {
+            render_pass,
+            swapchain,
+            images,
+            frame_buffers,
+        })
+    }
+
+    pub fn recreate(self, new_size: [u32; 2]) -> Result<Self, ResourceError> {
+        let swapchain_recreate_info = SwapchainCreateInfo {
+            image_extent: new_size,
+            ..self.swapchain.create_info()
+        };
+        
+        let (swapchain, images) = self.swapchain.recreate(swapchain_recreate_info)?;
+
+        let render_pass = vulkano::single_pass_renderpass!(
+            swapchain.device().clone(),
+            attachments: {
+                color: {
+                    format: swapchain.image_format(),
+                    samples: 1,
+                    load_op: Clear,
+                    store_op: Store,
+                },
+            },
+            pass: {
+                color: [color],
+                depth_stencil: {},
+            },
+        )?;
+
+        let frame_buffers = images
+            .iter()
+            .cloned()
+            .map(|image| {
+                let create_info = ImageViewCreateInfo {
+                    view_type: ImageViewType::Dim2d,
+                    subresource_range: ImageSubresourceRange {
+                        aspects: ImageAspects::COLOR,
+                        array_layers: 0..1,
+                        mip_levels: 0..1,
+                    },
+                    ..ImageViewCreateInfo::from_image(&image)
+                };
+
+                let view = ImageView::new(image, create_info)?;
+
+                Framebuffer::new(
+                    render_pass.clone(),
+                    FramebufferCreateInfo {
+                        attachments: vec![view],
+                        ..FramebufferCreateInfo::default()
+                    },
+                )
+            }).collect::<Result<_, _>>()?;
+
+        Ok(SwapchainResources {
             render_pass,
             swapchain,
             images,
@@ -118,10 +175,8 @@ impl TransientRenderResources {
     }
 }
 
-
 /// Resources that should be destroyed and recreated alongside the window
-pub struct ActiveRenderResources {
-    // Information that is truly active
+struct DeviceResources {
     window: Arc<Window>,
     vulkan_surface: Arc<Surface>,
     capabilities: Capabilities,
@@ -131,10 +186,10 @@ pub struct ActiveRenderResources {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
 
     // Ensures our transient resources cannot live longer than our static ones
-    pub transient_render_resources: Option<TransientRenderResources>,
+    swapchain_resources: Option<SwapchainResources>,
 }
 
-impl ActiveRenderResources {
+impl DeviceResources {
     pub fn new(render_resources: &RenderResources, window: Arc<Window>) -> Result<Self, ResourceError> {
         let vulkan_surface = Surface::from_window(render_resources.vulkan_instance.clone(), window.clone())?;
 
@@ -213,7 +268,7 @@ impl ActiveRenderResources {
             }
         ));
 
-        Ok(ActiveRenderResources {
+        Ok(DeviceResources {
             window,
             vulkan_surface,
             capabilities,
@@ -222,50 +277,8 @@ impl ActiveRenderResources {
             present_queue,
             command_buffer_allocator,
 
-            transient_render_resources: None,
+            swapchain_resources: None,
         })
-    }
-
-    pub fn draw(&mut self, pipeline: &Arc<GraphicsPipeline>, vertex_buffers: impl VertexBuffersCollection) -> Result<(), ResourceError> {
-        if let Some(transient_render_resources) = &self.transient_render_resources {
-            let command_buffers = transient_render_resources.frame_buffers
-                .iter()
-                .map(|frame_buffer| {
-                    let mut builder = AutoCommandBufferBuilder::primary(
-                        self.command_buffer_allocator.clone(),
-                        self.present_queue.queue_family_index(),
-                        CommandBufferUsage::MultipleSubmit,
-                    )?;
-
-                    builder
-                        .begin_render_pass(
-                            RenderPassBeginInfo {
-                                clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
-                                ..RenderPassBeginInfo::framebuffer(frame_buffer.clone())
-                            },
-                            SubpassBeginInfo {
-                                contents: SubpassContents::Inline,
-                                ..SubpassBeginInfo::default()
-                            },
-                        )?
-                        .bind_pipeline_graphics(pipeline.clone())?
-                        .bind_vertex_buffers(0, vertex_buffers.clone())?;
-
-                    unsafe {
-                        builder
-                            .draw(vertex_buffers.len() as u32, 1, 0, 0)
-                    }?;
-
-                    builder.end_render_pass(SubpassEndInfo::default())?;
-
-                    Ok(builder.build()?)
-                })
-                .collect::<Result<Vec<_>,_>>()?;
-
-            command_buffers.iter().map(|x| x.)
-        }
-
-        Ok(())
     }
 }
 
@@ -274,7 +287,7 @@ pub struct RenderResources {
     vulkan_instance: Arc<Instance>,
 
     // Ensures our active resources cannot live longer than our static ones
-    pub active_resources: Option<ActiveRenderResources>,
+    device_resources: Option<DeviceResources>,
 }
 
 impl RenderResources {
@@ -309,7 +322,44 @@ impl RenderResources {
 
         Ok(RenderResources {
             vulkan_instance,
-            active_resources: None,
+            device_resources: None,
         })
+    }
+
+    pub fn destroy_swapchain(&mut self) -> Result<&mut Self, ResourceError> {
+        if let Some(active_resources) = &mut self.device_resources {
+            active_resources.swapchain_resources = None;
+        } else {
+            warn!("Destroying swapchain without active resources!");
+        }
+
+        Ok(self)
+    }
+
+    pub fn recreate_swapchain(&mut self) -> Result<&mut Self, ResourceError> {
+        if let Some(device_resources) = &mut self.device_resources {
+            let swapchain_resources = match device_resources.swapchain_resources.take() {
+                Some(swapchain_resources) => swapchain_resources.recreate(device_resources.window.inner_size().into())?,
+                None => SwapchainResources::new(device_resources)?
+            };
+            
+            device_resources.swapchain_resources = Some(swapchain_resources);
+        } else {
+            warn!("Recreating swapchain without device resources!");
+        }
+        
+        Ok(self)
+    }
+
+    pub fn create_device_resources(&mut self,  window: Arc<Window>) -> Result<&mut Self, ResourceError> {
+        self.device_resources = Some(DeviceResources::new(self, window)?);
+        
+        Ok(self)
+    }
+    
+    pub fn destroy_device_resources(&mut self) -> &mut Self {
+        self.device_resources = None;
+
+        self
     }
 }
